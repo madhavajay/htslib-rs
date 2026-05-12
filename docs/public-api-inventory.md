@@ -1,0 +1,2053 @@
+# Public API Inventory
+
+Generated from `htslib/htslib/*.h` as an extraction aid for item-level classification. This inventory lists candidate public declarations and macros by header; it should be refined as each item is mapped to a Rust API, noodles API, compatibility adapter, deprecated item, or out-of-scope decision.
+
+## `bgzf.h`
+
+- L31: `#define HTSLIB_BGZF_H`
+- L42: `#define HTSLIB_SSIZE_T`
+- L43: `#define ssize_t intptr_t`
+- L50: `#define BGZF_BLOCK_SIZE     0xff00 // make sure compressBound(BGZF_BLOCK_SIZE) < BGZF_MAX_BLOCK_SIZE`
+- L51: `#define BGZF_MAX_BLOCK_SIZE 0x10000`
+- L53: `#define BGZF_ERR_ZLIB   1`
+- L54: `#define BGZF_ERR_HEADER 2`
+- L55: `#define BGZF_ERR_IO     4`
+- L56: `#define BGZF_ERR_MISUSE 8`
+- L57: `#define BGZF_ERR_MT     16 // stream cannot be multi-threaded`
+- L58: `#define BGZF_ERR_CRC    32`
+- L60: `struct hFILE;`
+- L61: `struct hts_tpool;`
+- L62: `struct kstring_t;`
+- L63: `struct bgzf_mtaux_t;`
+- L64: `typedef struct bgzidx_t bgzidx_t;`
+- L65: `typedef struct bgzf_cache_t bgzf_cache_t;`
+- L66: `struct z_stream_s;`
+- L68: `struct BGZF {`
+- L78: `struct hFILE *fp; // actual file handle`
+- L79: `struct bgzf_mtaux_t *mt; // only used for multi-threading`
+- L82: `struct z_stream_s *gz_stream; // for gzip-compressed files`
+- L86: `typedef struct BGZF BGZF;`
+- L87: `#define HTS_BGZF_TYPEDEF`
+- L110: `HTSLIB_EXPORT`
+- L111: `BGZF* bgzf_dopen(int fd, const char *mode);`
+- L113: `#define bgzf_fdopen(fd, mode) bgzf_dopen((fd), (mode)) // for backward compatibility`
+- L118: `HTSLIB_EXPORT`
+- L119: `BGZF* bgzf_open(const char* path, const char *mode);`
+- L124: `HTSLIB_EXPORT`
+- L125: `BGZF* bgzf_hopen(struct hFILE *fp, const char *mode);`
+- L133: `HTSLIB_EXPORT`
+- L134: `int bgzf_close(BGZF *fp);`
+- L144: `HTSLIB_EXPORT`
+- L145: `ssize_t bgzf_read(BGZF *fp, void *data, size_t length) HTS_RESULT_USED;`
+- L151: `static inline ssize_t bgzf_read_small(BGZF *fp, void *data, size_t length) {`
+- L176: `HTSLIB_EXPORT`
+- L177: `ssize_t bgzf_write(BGZF *fp, const void *data, size_t length) HTS_RESULT_USED;`
+- L184: `ssize_t bgzf_write_small(BGZF *fp, const void *data, size_t length) {`
+- L207: `HTSLIB_EXPORT`
+- L208: `ssize_t bgzf_block_write(BGZF *fp, const void *data, size_t length);`
+- L217: `HTSLIB_EXPORT`
+- L218: `int bgzf_peek(BGZF *fp);`
+- L230: `HTSLIB_EXPORT`
+- L231: `ssize_t bgzf_raw_read(BGZF *fp, void *data, size_t length) HTS_RESULT_USED;`
+- L243: `HTSLIB_EXPORT`
+- L244: `ssize_t bgzf_raw_write(BGZF *fp, const void *data, size_t length) HTS_RESULT_USED;`
+- L252: `HTSLIB_EXPORT`
+- L253: `int bgzf_flush(BGZF *fp) HTS_RESULT_USED;`
+- L261: `#define bgzf_tell(fp) (((fp)->block_address << 16) | ((fp)->block_offset & 0xFFFF))`
+- L274: `HTSLIB_EXPORT`
+- L275: `int64_t bgzf_seek(BGZF *fp, int64_t pos, int whence) HTS_RESULT_USED;`
+- L286: `HTSLIB_EXPORT`
+- L287: `int bgzf_check_EOF(BGZF *fp);`
+- L299: `HTSLIB_EXPORT`
+- L300: `int bgzf_compression(BGZF *fp);`
+- L308: `HTSLIB_EXPORT`
+- L309: `int bgzf_is_bgzf(const char *fn) HTS_DEPRECATED("Use bgzf_compression() or hts_detect_format() instead");`
+- L321: `HTSLIB_EXPORT`
+- L322: `void bgzf_set_cache_size(BGZF *fp, int size);`
+- L328: `HTSLIB_EXPORT`
+- L329: `int bgzf_flush_try(BGZF *fp, ssize_t size) HTS_RESULT_USED;`
+- L336: `HTSLIB_EXPORT`
+- L337: `int bgzf_getc(BGZF *fp);`
+- L348: `HTSLIB_EXPORT`
+- L349: `int bgzf_getline(BGZF *fp, int delim, struct kstring_t *str);`
+- L354: `HTSLIB_EXPORT`
+- L355: `int bgzf_read_block(BGZF *fp) HTS_RESULT_USED;`
+- L367: `HTSLIB_EXPORT`
+- L368: `int bgzf_thread_pool(BGZF *fp, struct hts_tpool *pool, int qsize);`
+- L377: `HTSLIB_EXPORT`
+- L378: `int bgzf_mt(BGZF *fp, int n_threads, int n_sub_blks);`
+- L391: `HTSLIB_EXPORT`
+- L392: `int bgzf_compress(void *dst, size_t *dlen, const void *src, size_t slen, int level);`
+- L410: `HTSLIB_EXPORT`
+- L411: `int bgzf_useek(BGZF *fp, off_t uoffset, int where) HTS_RESULT_USED;`
+- L420: `HTSLIB_EXPORT`
+- L421: `off_t bgzf_utell(BGZF *fp);`
+- L435: `HTSLIB_EXPORT`
+- L436: `int bgzf_index_build_init(BGZF *fp);`
+- L445: `HTSLIB_EXPORT`
+- L464: `HTSLIB_EXPORT`
+- L475: `HTSLIB_EXPORT`
+- L493: `HTSLIB_EXPORT`
+
+## `cram.h`
+
+- L36: `#define HTSLIB_CRAM_H`
+- L61: `enum cram_block_method {`
+- L84: `enum cram_block_method {`
+- L109: `typedef struct {`
+- L110: `enum cram_block_method method;`
+- L132: `enum cram_content_type {`
+- L143: `typedef struct cram_file_def cram_file_def;`
+- L144: `typedef struct cram_fd cram_fd;`
+- L145: `typedef struct cram_container cram_container;`
+- L146: `typedef struct cram_block cram_block;`
+- L147: `typedef struct cram_slice cram_slice;`
+- L148: `typedef struct cram_metrics cram_metrics;`
+- L149: `typedef struct cram_block_slice_hdr cram_block_slice_hdr;`
+- L150: `typedef struct cram_block_compression_hdr cram_block_compression_hdr;`
+- L151: `typedef struct cram_codec cram_codec;`
+- L152: `typedef struct refs_t refs_t;`
+- L154: `struct hFILE;`
+- L162: `HTSLIB_EXPORT`
+- L163: `sam_hdr_t *cram_fd_get_header(cram_fd *fd);`
+- L165: `HTSLIB_EXPORT`
+- L166: `void cram_fd_set_header(cram_fd *fd, sam_hdr_t *hdr);`
+- L168: `HTSLIB_EXPORT`
+- L169: `int cram_fd_get_version(cram_fd *fd);`
+- L171: `HTSLIB_EXPORT`
+- L172: `void cram_fd_set_version(cram_fd *fd, int vers);`
+- L174: `HTSLIB_EXPORT`
+- L175: `int cram_major_vers(cram_fd *fd);`
+- L176: `HTSLIB_EXPORT`
+- L177: `int cram_minor_vers(cram_fd *fd);`
+- L179: `HTSLIB_EXPORT`
+- L180: `struct hFILE *cram_fd_get_fp(cram_fd *fd);`
+- L181: `HTSLIB_EXPORT`
+- L182: `void cram_fd_set_fp(cram_fd *fd, struct hFILE *fp);`
+- L189: `HTSLIB_EXPORT`
+- L190: `int32_t cram_container_get_length(cram_container *c);`
+- L191: `HTSLIB_EXPORT`
+- L192: `void cram_container_set_length(cram_container *c, int32_t length);`
+- L193: `HTSLIB_EXPORT`
+- L194: `int32_t cram_container_get_num_blocks(cram_container *c);`
+- L195: `HTSLIB_EXPORT`
+- L196: `void cram_container_set_num_blocks(cram_container *c, int32_t num_blocks);`
+- L197: `HTSLIB_EXPORT`
+- L198: `int32_t *cram_container_get_landmarks(cram_container *c, int32_t *num_landmarks);`
+- L199: `HTSLIB_EXPORT`
+- L202: `HTSLIB_EXPORT`
+- L203: `int32_t cram_container_get_num_records(cram_container *c);`
+- L204: `HTSLIB_EXPORT`
+- L205: `int64_t cram_container_get_num_bases(cram_container *c);`
+- L208: `HTSLIB_EXPORT`
+- L209: `int cram_container_is_empty(cram_fd *fd);`
+- L213: `HTSLIB_EXPORT`
+- L221: `HTSLIB_EXPORT`
+- L222: `int32_t cram_block_get_content_id(cram_block *b);`
+- L223: `HTSLIB_EXPORT`
+- L224: `int32_t cram_block_get_comp_size(cram_block *b);`
+- L225: `HTSLIB_EXPORT`
+- L226: `int32_t cram_block_get_uncomp_size(cram_block *b);`
+- L227: `HTSLIB_EXPORT`
+- L228: `int32_t cram_block_get_crc32(cram_block *b);`
+- L229: `HTSLIB_EXPORT`
+- L230: `void *  cram_block_get_data(cram_block *b);`
+- L231: `HTSLIB_EXPORT`
+- L232: `enum cram_content_type cram_block_get_content_type(cram_block *b);`
+- L233: `HTSLIB_EXPORT`
+- L234: `enum cram_block_method cram_block_get_method(cram_block *b);`
+- L236: `HTSLIB_EXPORT`
+- L238: `enum cram_block_method comp);`
+- L240: `HTSLIB_EXPORT`
+- L241: `void cram_block_set_content_id(cram_block *b, int32_t id);`
+- L242: `HTSLIB_EXPORT`
+- L243: `void cram_block_set_comp_size(cram_block *b, int32_t size);`
+- L244: `HTSLIB_EXPORT`
+- L245: `void cram_block_set_uncomp_size(cram_block *b, int32_t size);`
+- L246: `HTSLIB_EXPORT`
+- L247: `void cram_block_set_crc32(cram_block *b, int32_t crc);`
+- L248: `HTSLIB_EXPORT`
+- L249: `void cram_block_set_data(cram_block *b, void *data);`
+- L251: `HTSLIB_EXPORT`
+- L252: `int cram_block_append(cram_block *b, const void *data, int size);`
+- L253: `HTSLIB_EXPORT`
+- L254: `void cram_block_update_size(cram_block *b);`
+- L257: `HTSLIB_EXPORT`
+- L258: `size_t cram_block_get_offset(cram_block *b);`
+- L259: `HTSLIB_EXPORT`
+- L260: `void cram_block_set_offset(cram_block *b, size_t offset);`
+- L266: `HTSLIB_EXPORT`
+- L267: `uint32_t cram_block_size(cram_block *b);`
+- L277: `HTSLIB_EXPORT`
+- L278: `void cram_codec_get_content_ids(cram_codec *c, int ids[2]);`
+- L287: `HTSLIB_EXPORT`
+- L288: `int cram_codec_describe(cram_codec *c, kstring_t *ks);`
+- L320: `HTSLIB_EXPORT`
+- L334: `HTSLIB_EXPORT`
+- L335: `int cram_copy_slice(cram_fd *in, cram_fd *out, int32_t num_slice);`
+- L345: `HTSLIB_EXPORT`
+- L354: `HTSLIB_EXPORT`
+- L360: `HTSLIB_EXPORT`
+- L361: `void cram_free_compression_header(cram_block_compression_hdr *hdr);`
+- L363: `typedef struct cram_cid2ds_t cram_cid2ds_t;`
+- L377: `HTSLIB_EXPORT`
+- L390: `HTSLIB_EXPORT`
+- L391: `int *cram_cid2ds_query(cram_cid2ds_t *c2d, int content_id, int *n);`
+- L396: `HTSLIB_EXPORT`
+- L397: `void cram_cid2ds_free(cram_cid2ds_t *cid2ds);`
+- L406: `HTSLIB_EXPORT`
+- L407: `int cram_describe_encodings(cram_block_compression_hdr *hdr, kstring_t *ks);`
+- L417: `HTSLIB_EXPORT`
+- L418: `int32_t cram_slice_hdr_get_num_blocks(cram_block_slice_hdr *hdr);`
+- L424: `HTSLIB_EXPORT`
+- L425: `int cram_slice_hdr_get_embed_ref_id(cram_block_slice_hdr *h);`
+- L431: `HTSLIB_EXPORT`
+- L440: `HTSLIB_EXPORT`
+- L441: `cram_block_slice_hdr *cram_decode_slice_header(cram_fd *fd, cram_block *b);`
+- L446: `HTSLIB_EXPORT`
+- L447: `void cram_free_slice_header(cram_block_slice_hdr *hdr);`
+- L472: `HTSLIB_EXPORT`
+- L485: `HTSLIB_EXPORT`
+- L486: `cram_block *cram_read_block(cram_fd *fd);`
+- L494: `HTSLIB_EXPORT`
+- L495: `int cram_write_block(cram_fd *fd, cram_block *b);`
+- L499: `HTSLIB_EXPORT`
+- L500: `void cram_free_block(cram_block *b);`
+- L508: `HTSLIB_EXPORT`
+- L509: `int cram_uncompress_block(cram_block *b);`
+- L524: `HTSLIB_EXPORT`
+- L546: `HTSLIB_EXPORT`
+- L547: `cram_container *cram_new_container(int nrec, int nslice);`
+- L548: `HTSLIB_EXPORT`
+- L549: `void cram_free_container(cram_container *c);`
+- L560: `HTSLIB_EXPORT`
+- L561: `cram_container *cram_read_container(cram_fd *fd);`
+- L569: `HTSLIB_EXPORT`
+- L570: `int cram_write_container(cram_fd *fd, cram_container *h);`
+- L580: `HTSLIB_EXPORT`
+- L581: `int cram_store_container(cram_fd *fd, cram_container *c, char *dat, int *size);`
+- L583: `HTSLIB_EXPORT`
+- L584: `int cram_container_size(cram_container *c);`
+- L599: `HTSLIB_EXPORT`
+- L600: `cram_fd *cram_open(const char *filename, const char *mode);`
+- L608: `HTSLIB_EXPORT`
+- L609: `cram_fd *cram_dopen(struct hFILE *fp, const char *filename, const char *mode);`
+- L617: `HTSLIB_EXPORT`
+- L618: `int cram_close(cram_fd *fd);`
+- L626: `HTSLIB_EXPORT`
+- L627: `int cram_seek(cram_fd *fd, off_t offset, int whence);`
+- L636: `HTSLIB_EXPORT`
+- L637: `int cram_flush(cram_fd *fd);`
+- L646: `HTSLIB_EXPORT`
+- L647: `int cram_eof(cram_fd *fd);`
+- L658: `HTSLIB_EXPORT`
+- L659: `int cram_set_option(cram_fd *fd, enum hts_fmt_option opt, ...);`
+- L670: `HTSLIB_EXPORT`
+- L671: `int cram_set_voption(cram_fd *fd, enum hts_fmt_option opt, va_list args);`
+- L684: `HTSLIB_EXPORT`
+- L685: `int cram_set_header(cram_fd *fd, sam_hdr_t *hdr);`
+- L697: `HTSLIB_EXPORT`
+- L698: `int cram_check_EOF(cram_fd *fd);`
+- L701: `HTSLIB_EXPORT`
+- L702: `int int32_put_blk(cram_block *b, int32_t val);`
+- L710: `typedef sam_hdr_t SAM_hdr;`
+- L720: `static inline SAM_hdr *sam_hdr_parse_(const char *hdr, size_t len) { return sam_hdr_parse(len, hdr); }`
+- L728: `static inline void sam_hdr_free(SAM_hdr *hdr) { sam_hdr_destroy(hdr); }`
+- L748: `#define sam_hdr_add_PG sam_hdr_add_pg`
+- L761: `HTSLIB_EXPORT`
+- L762: `refs_t *cram_get_refs(htsFile *fd);`
+- L775: `HTSLIB_EXPORT`
+- L787: `HTSLIB_EXPORT`
+- L788: `int64_t cram_num_containers(cram_fd *fd);`
+- L801: `HTSLIB_EXPORT`
+- L810: `HTSLIB_EXPORT`
+- L811: `off_t cram_container_num2offset(cram_fd *fd, int64_t n);`
+- L817: `HTSLIB_EXPORT`
+- L818: `int64_t cram_container_offset2num(cram_fd *fd, off_t pos);`
+
+## `faidx.h`
+
+- L30: `#define HTSLIB_FAIDX_H`
+- L69: `struct faidx_t;`
+- L71: `typedef struct faidx_t faidx_t;`
+- L74: `struct hts_tpool;`
+- L77: `enum fai_format_options {`
+- L93: `HTSLIB_EXPORT`
+- L94: `int fai_build3(const char *fn, const char *fnfai, const char *fngzi) HTS_RESULT_USED;`
+- L103: `HTSLIB_EXPORT`
+- L104: `int fai_build(const char *fn) HTS_RESULT_USED;`
+- L107: `HTSLIB_EXPORT`
+- L108: `void fai_destroy(faidx_t *fai);`
+- L110: `enum fai_load_options {`
+- L131: `HTSLIB_EXPORT`
+- L139: `This function is equivalent to fai_load3(fn, NULL, NULL, FAI_CREATE|FAI_CACHE);`
+- L141: `HTSLIB_EXPORT`
+- L142: `faidx_t *fai_load(const char *fn);`
+- L162: `HTSLIB_EXPORT`
+- L171: `This function is equivalent to fai_load3_format(fn, NULL, NULL, FAI_CREATE|FAI_CACHE, format);`
+- L173: `HTSLIB_EXPORT`
+- L174: `faidx_t *fai_load_format(const char *fn, enum fai_format_options format);`
+- L189: `HTSLIB_EXPORT`
+- L190: `char *fai_fetch(const faidx_t *fai, const char *reg, int *len);`
+- L191: `HTSLIB_EXPORT`
+- L192: `char *fai_fetch64(const faidx_t *fai, const char *reg, hts_pos_t *len);`
+- L200: `HTSLIB_EXPORT`
+- L201: `hts_pos_t fai_line_length(const faidx_t *fai, const char *reg);`
+- L214: `HTSLIB_EXPORT`
+- L215: `char *fai_fetchqual(const faidx_t *fai, const char *reg, int *len);`
+- L216: `HTSLIB_EXPORT`
+- L217: `char *fai_fetchqual64(const faidx_t *fai, const char *reg, hts_pos_t *len);`
+- L223: `HTSLIB_EXPORT`
+- L224: `int faidx_fetch_nseq(const faidx_t *fai) HTS_DEPRECATED("Please use faidx_nseq instead");`
+- L237: `HTSLIB_EXPORT`
+- L238: `char *faidx_fetch_seq(const faidx_t *fai, const char *c_name, int p_beg_i, int p_end_i, int *len);`
+- L251: `HTSLIB_EXPORT`
+- L252: `char *faidx_fetch_seq64(const faidx_t *fai, const char *c_name, hts_pos_t p_beg_i, hts_pos_t p_end_i, hts_pos_t *len);`
+- L265: `HTSLIB_EXPORT`
+- L266: `char *faidx_fetch_qual(const faidx_t *fai, const char *c_name, int p_beg_i, int p_end_i, int *len);`
+- L279: `HTSLIB_EXPORT`
+- L280: `char *faidx_fetch_qual64(const faidx_t *fai, const char *c_name, hts_pos_t p_beg_i, hts_pos_t p_end_i, hts_pos_t *len);`
+- L287: `HTSLIB_EXPORT`
+- L288: `int faidx_has_seq(const faidx_t *fai, const char *seq);`
+- L291: `HTSLIB_EXPORT`
+- L292: `int faidx_nseq(const faidx_t *fai);`
+- L295: `HTSLIB_EXPORT`
+- L296: `const char *faidx_iseq(const faidx_t *fai, int i);`
+- L303: `HTSLIB_EXPORT`
+- L304: `hts_pos_t faidx_seq_len64(const faidx_t *fai, const char *seq);`
+- L314: `HTSLIB_EXPORT`
+- L315: `int faidx_seq_len(const faidx_t *fai, const char *seq);`
+- L330: `HTSLIB_EXPORT`
+- L352: `HTSLIB_EXPORT`
+- L360: `HTSLIB_EXPORT`
+- L361: `void fai_set_cache_size(faidx_t *fai, int cache_size);`
+- L369: `HTSLIB_EXPORT`
+- L370: `int fai_thread_pool(faidx_t *fai, struct hts_tpool *pool, int qsize);`
+- L385: `HTSLIB_EXPORT`
+- L386: `char *fai_path(const char *fa);`
+
+## `hfile.h`
+
+- L27: `#define HTSLIB_HFILE_H`
+- L38: `#define HTSLIB_SSIZE_T`
+- L39: `#define ssize_t intptr_t`
+- L46: `struct hFILE_backend;`
+- L47: `struct kstring_t;`
+- L55: `typedef struct hFILE {`
+- L73: `HTSLIB_EXPORT`
+- L74: `hFILE *hopen(const char *filename, const char *mode, ...) HTS_RESULT_USED;`
+- L89: `HTSLIB_EXPORT`
+- L90: `hFILE *hdopen(int fd, const char *mode) HTS_RESULT_USED;`
+- L98: `HTSLIB_EXPORT`
+- L99: `int hisremote(const char *filename) HTS_RESULT_USED;`
+- L112: `HTSLIB_EXPORT`
+- L119: `HTSLIB_EXPORT`
+- L120: `int hclose(hFILE *fp) HTS_RESULT_USED;`
+- L125: `HTSLIB_EXPORT`
+- L126: `void hclose_abruptly(hFILE *fp);`
+- L134: `static inline int herrno(hFILE *fp)`
+- L140: `static inline void hclearerr(hFILE *fp)`
+- L149: `HTSLIB_EXPORT`
+- L150: `off_t hseek(hFILE *fp, off_t offset, int whence) HTS_RESULT_USED;`
+- L155: `static inline off_t htell(hFILE *fp)`
+- L163: `static inline int hgetc(hFILE *fp)`
+- L165: `HTSLIB_EXPORT`
+- L166: `extern int hgetc2(hFILE *);`
+- L182: `HTSLIB_EXPORT`
+- L195: `static inline ssize_t HTS_RESULT_USED`
+- L211: `HTSLIB_EXPORT`
+- L212: `char *hgets(char *buffer, int size, hFILE *fp) HTS_RESULT_USED;`
+- L224: `HTSLIB_EXPORT`
+- L225: `int khgetline(struct kstring_t *kstr, hFILE *fp) HTS_RESULT_USED;`
+- L238: `HTSLIB_EXPORT`
+- L239: `ssize_t hpeek(hFILE *fp, void *buffer, size_t nbytes) HTS_RESULT_USED;`
+- L247: `static inline ssize_t HTS_RESULT_USED`
+- L250: `HTSLIB_EXPORT`
+- L251: `extern ssize_t hread2(hFILE *, void *, size_t, size_t);`
+- L263: `static inline int hputc(int c, hFILE *fp)`
+- L265: `HTSLIB_EXPORT`
+- L266: `extern int hputc2(int, hFILE *);`
+- L275: `static inline int hputs(const char *text, hFILE *fp)`
+- L277: `HTSLIB_EXPORT`
+- L278: `extern int hputs2(const char *, size_t, size_t, hFILE *);`
+- L292: `static inline ssize_t HTS_RESULT_USED`
+- L295: `HTSLIB_EXPORT`
+- L296: `extern ssize_t hwrite2(hFILE *, const void *, size_t, size_t);`
+- L297: `HTSLIB_EXPORT`
+- L298: `extern int hfile_set_blksize(hFILE *fp, size_t bufsiz);`
+- L326: `HTSLIB_EXPORT`
+- L327: `int hflush(hFILE *fp) HTS_RESULT_USED;`
+- L335: `HTSLIB_EXPORT`
+- L336: `char *hfile_mem_get_buffer(hFILE *file, size_t *length);`
+- L346: `HTSLIB_EXPORT`
+- L347: `char *hfile_mem_steal_buffer(hFILE *file, size_t *length);`
+- L367: `HTSLIB_EXPORT`
+- L368: `int hfile_list_schemes(const char *plugin, const char *sc_list[], int *nschemes);`
+- L385: `HTSLIB_EXPORT`
+- L386: `int hfile_list_plugins(const char *plist[], int *nplugins);`
+- L394: `HTSLIB_EXPORT`
+- L395: `int hfile_has_plugin(const char *name);`
+
+## `hts.h`
+
+- L29: `#define HTSLIB_HTS_H`
+- L46: `#define HTS_PATH_SEPARATOR_CHAR ';'`
+- L47: `#define HTS_PATH_SEPARATOR_STR  ";"`
+- L49: `#define HTS_PATH_SEPARATOR_CHAR ':'`
+- L50: `#define HTS_PATH_SEPARATOR_STR  ":"`
+- L54: `typedef struct BGZF BGZF;`
+- L55: `#define HTS_BGZF_TYPEDEF`
+- L57: `struct cram_fd;`
+- L58: `struct hFILE;`
+- L59: `struct hts_tpool;`
+- L60: `struct sam_hdr_t;`
+- L86: `#define hts_expand(type_t, n, m, ptr) do {                              \`
+- L118: `#define hts_expand0(type_t, n, m, ptr) do {                             \`
+- L129: `HTSLIB_EXPORT`
+- L133: `#define HTS_RESIZE_CLEAR 1`
+- L157: `#define hts_resize(type_t, num, size_ptr, ptr, flags)       \`
+- L171: `HTSLIB_EXPORT`
+- L172: `void hts_lib_shutdown(void);`
+- L180: `HTSLIB_EXPORT`
+- L181: `void hts_free(void *ptr);`
+- L190: `enum htsFormatCategory {`
+- L199: `enum htsExactFormat {`
+- L212: `enum htsCompression {`
+- L218: `typedef struct htsFormat {`
+- L219: `enum htsFormatCategory category;`
+- L220: `enum htsExactFormat format;`
+- L222: `enum htsCompression compression;`
+- L227: `struct hts_idx_t;`
+- L228: `typedef struct hts_idx_t hts_idx_t;`
+- L229: `struct hts_filter_t;`
+- L247: `typedef struct htsFile {`
+- L254: `struct cram_fd *cram;`
+- L255: `struct hFILE *hfile;`
+- L261: `struct sam_hdr_t *bam_header;`
+- L262: `struct hts_filter_t *filter;`
+- L272: `typedef struct htsThreadPool {`
+- L273: `struct hts_tpool *pool; // The shared thread pool itself`
+- L278: `enum sam_fields {`
+- L295: `enum hts_fmt_option {`
+- L383: `enum hts_profile_option {`
+- L391: `#define cram_option hts_fmt_option`
+- L393: `typedef struct hts_opt {`
+- L395: `enum hts_fmt_option opt;  // tokenised key`
+- L400: `struct hts_opt *next;`
+- L403: `#define HTS_FILE_OPTS_INIT {{0},0}`
+- L408: `#define HTS_IDX_DELIM "##idx##"`
+- L421: `HTSLIB_EXPORT`
+- L422: `int hts_opt_add(hts_opt **opts, const char *c_arg);`
+- L430: `HTSLIB_EXPORT`
+- L431: `int hts_opt_apply(htsFile *fp, hts_opt *opts);`
+- L436: `HTSLIB_EXPORT`
+- L437: `void hts_opt_free(hts_opt *opts);`
+- L447: `HTSLIB_EXPORT`
+- L448: `int hts_parse_format(htsFormat *opt, const char *str);`
+- L461: `HTSLIB_EXPORT`
+- L462: `int hts_parse_opt_list(htsFormat *opt, const char *str);`
+- L470: `HTSLIB_EXPORT`
+- L476: `HTSLIB_EXPORT`
+- L482: `HTSLIB_EXPORT`
+- L490: `HTSLIB_EXPORT`
+- L491: `const char *hts_version(void);`
+- L503: `#define HTS_VERSION 102390`
+- L509: `HTSLIB_EXPORT`
+- L510: `unsigned int hts_features(void);`
+- L512: `HTSLIB_EXPORT`
+- L513: `const char *hts_test_feature(unsigned int id);`
+- L519: `HTSLIB_EXPORT`
+- L520: `const char *hts_feature_string(void);`
+- L523: `#define HTS_FEATURE_CONFIGURE    1`
+- L526: `#define HTS_FEATURE_PLUGINS      2`
+- L529: `#define HTS_FEATURE_LIBCURL      (1u<<10)`
+- L530: `#define HTS_FEATURE_S3           (1u<<11)`
+- L531: `#define HTS_FEATURE_GCS          (1u<<12)`
+- L534: `#define HTS_FEATURE_LIBDEFLATE   (1u<<20)`
+- L535: `#define HTS_FEATURE_LZMA         (1u<<21)`
+- L536: `#define HTS_FEATURE_BZIP2        (1u<<22)`
+- L537: `#define HTS_FEATURE_HTSCODECS    (1u<<23) // htscodecs library version`
+- L540: `#define HTS_FEATURE_CC           (1u<<27)`
+- L541: `#define HTS_FEATURE_CFLAGS       (1u<<28)`
+- L542: `#define HTS_FEATURE_CPPFLAGS     (1u<<29)`
+- L543: `#define HTS_FEATURE_LDFLAGS      (1u<<30)`
+- L554: `HTSLIB_EXPORT`
+- L555: `int hts_detect_format(struct hFILE *fp, htsFormat *fmt);`
+- L571: `HTSLIB_EXPORT`
+- L572: `int hts_detect_format2(struct hFILE *fp, const char *fname, htsFormat *fmt);`
+- L579: `HTSLIB_EXPORT`
+- L580: `char *hts_format_description(const htsFormat *format);`
+- L614: `HTSLIB_EXPORT`
+- L615: `htsFile *hts_open(const char *fn, const char *mode);`
+- L631: `HTSLIB_EXPORT`
+- L632: `htsFile *hts_open_format(const char *fn, const char *mode, const htsFormat *fmt);`
+- L639: `HTSLIB_EXPORT`
+- L640: `htsFile *hts_hopen(struct hFILE *fp, const char *fn, const char *mode);`
+- L648: `HTSLIB_EXPORT`
+- L649: `int hts_flush(htsFile *fp);`
+- L656: `HTSLIB_EXPORT`
+- L657: `int hts_close(htsFile *fp);`
+- L664: `HTSLIB_EXPORT`
+- L665: `const htsFormat *hts_get_format(htsFile *fp);`
+- L672: `HTSLIB_EXPORT`
+- L673: `const char *hts_format_file_extension(const htsFormat *format);`
+- L682: `HTSLIB_EXPORT`
+- L683: `int hts_set_opt(htsFile *fp, enum hts_fmt_option opt, ...);`
+- L693: `HTSLIB_EXPORT`
+- L694: `int hts_getline(htsFile *fp, int delimiter, kstring_t *str);`
+- L696: `HTSLIB_EXPORT`
+- L697: `char **hts_readlines(const char *fn, int *_n);`
+- L706: `HTSLIB_EXPORT`
+- L707: `char **hts_readlist(const char *fn, int is_file, int *_n);`
+- L717: `HTSLIB_EXPORT`
+- L718: `int hts_set_threads(htsFile *fp, int n);`
+- L726: `HTSLIB_EXPORT`
+- L727: `int hts_set_thread_pool(htsFile *fp, htsThreadPool *p);`
+- L735: `HTSLIB_EXPORT`
+- L736: `void hts_set_cache_size(htsFile *fp, int n);`
+- L745: `HTSLIB_EXPORT`
+- L746: `int hts_set_fai_filename(htsFile *fp, const char *fn_aux);`
+- L755: `HTSLIB_EXPORT`
+- L756: `int hts_set_filter_expression(htsFile *fp, const char *expr);`
+- L768: `HTSLIB_EXPORT`
+- L769: `int hts_check_EOF(htsFile *fp);`
+- L785: `#define HTS_IDX_NOCOOR (-2)`
+- L786: `#define HTS_IDX_START  (-3)`
+- L787: `#define HTS_IDX_REST   (-4)`
+- L788: `#define HTS_IDX_NONE   (-5)`
+- L790: `#define HTS_FMT_CSI 0`
+- L791: `#define HTS_FMT_BAI 1`
+- L792: `#define HTS_FMT_TBI 2`
+- L793: `#define HTS_FMT_CRAI 3`
+- L794: `#define HTS_FMT_FAI 4`
+- L799: `#define HTS_POS_MAX ((((int64_t)INT_MAX)<<32)|INT_MAX)`
+- L800: `#define HTS_POS_MIN INT64_MIN`
+- L801: `#define PRIhts_pos PRId64`
+- L802: `typedef int64_t hts_pos_t;`
+- L811: `typedef struct hts_pair_pos_t {`
+- L815: `typedef hts_pair_pos_t hts_pair32_t;  // For backwards compatibility`
+- L817: `typedef struct hts_pair64_t {`
+- L821: `typedef struct hts_pair64_max_t {`
+- L826: `typedef struct hts_reglist_t {`
+- L834: `typedef int hts_readrec_func(BGZF *fp, void *data, void *r, int *tid, hts_pos_t *beg, hts_pos_t *end);`
+- L835: `typedef int hts_seek_func(void *fp, int64_t offset, int where);`
+- L836: `typedef int64_t hts_tell_func(void *fp);`
+- L877: `typedef struct hts_itr_t {`
+- L895: `typedef hts_itr_t hts_itr_multi_t;`
+- L898: `#define hts_bin_first(l) (((1<<(((l)<<1) + (l))) - 1) / 7)`
+- L900: `#define hts_bin_parent(b) (((b) - 1) >> 3)`
+- L916: `HTSLIB_EXPORT`
+- L917: `hts_idx_t *hts_idx_init(int n, int fmt, uint64_t offset0, int min_shift, int n_lvls);`
+- L922: `HTSLIB_EXPORT`
+- L923: `void hts_idx_destroy(hts_idx_t *idx);`
+- L937: `HTSLIB_EXPORT`
+- L938: `int hts_idx_push(hts_idx_t *idx, int tid, hts_pos_t beg, hts_pos_t end, uint64_t offset, int is_mapped);`
+- L945: `HTSLIB_EXPORT`
+- L946: `int hts_idx_finish(hts_idx_t *idx, uint64_t final_offset);`
+- L952: `HTSLIB_EXPORT`
+- L953: `int hts_idx_fmt(hts_idx_t *idx);`
+- L961: `HTSLIB_EXPORT`
+- L962: `int hts_idx_tbi_name(hts_idx_t *idx, int tid, const char *name);`
+- L972: `HTSLIB_EXPORT`
+- L973: `int hts_idx_save(const hts_idx_t *idx, const char *fn, int fmt) HTS_RESULT_USED;`
+- L982: `HTSLIB_EXPORT`
+- L983: `int hts_idx_save_as(const hts_idx_t *idx, const char *fn, const char *fnidx, int fmt) HTS_RESULT_USED;`
+- L1014: `Equivalent to hts_idx_load3(fn, NULL, fmt, HTS_IDX_SAVE_REMOTE);`
+- L1016: `HTSLIB_EXPORT`
+- L1017: `hts_idx_t *hts_idx_load(const char *fn, int fmt);`
+- L1024: `Equivalent to hts_idx_load3(fn, fnidx, 0, 0);`
+- L1028: `HTSLIB_EXPORT`
+- L1029: `hts_idx_t *hts_idx_load2(const char *fn, const char *fnidx);`
+- L1052: `HTSLIB_EXPORT`
+- L1053: `hts_idx_t *hts_idx_load3(const char *fn, const char *fnidx, int fmt, int flags);`
+- L1056: `#define HTS_IDX_SAVE_REMOTE 1`
+- L1057: `#define HTS_IDX_SILENT_FAIL 2`
+- L1062: `typedef const char *(*hts_id2name_f)(void*, int);`
+- L1075: `HTSLIB_EXPORT`
+- L1076: `uint8_t *hts_idx_get_meta(hts_idx_t *idx, uint32_t *l_meta);`
+- L1090: `HTSLIB_EXPORT`
+- L1091: `int hts_idx_set_meta(hts_idx_t *idx, uint32_t l_meta, uint8_t *meta, int is_copy);`
+- L1107: `HTSLIB_EXPORT`
+- L1108: `int hts_idx_get_stat(const hts_idx_t* idx, int tid, uint64_t* mapped, uint64_t* unmapped);`
+- L1117: `HTSLIB_EXPORT`
+- L1118: `uint64_t hts_idx_get_n_no_coor(const hts_idx_t* idx);`
+- L1130: `HTSLIB_EXPORT`
+- L1131: `const char **hts_idx_seqnames(const hts_idx_t *idx, int *n, hts_id2name_f getid, void *hdr); // free only the array, not the values`
+- L1137: `HTSLIB_EXPORT`
+- L1138: `int hts_idx_nseq(const hts_idx_t *idx);`
+- L1143: `#define HTS_PARSE_THOUSANDS_SEP 1  ///< Ignore ',' separators within numbers`
+- L1144: `#define HTS_PARSE_ONE_COORD     2  ///< chr:pos means chr:pos-pos and not chr:pos-end`
+- L1145: `#define HTS_PARSE_LIST          4  ///< Expect a comma separated list of regions. (Disables HTS_PARSE_THOUSANDS_SEP)`
+- L1175: `HTSLIB_EXPORT`
+- L1176: `long long hts_parse_decimal(const char *str, char **strend, int flags);`
+- L1178: `typedef int (*hts_name2id_f)(void*, const char*);`
+- L1190: `HTSLIB_EXPORT`
+- L1191: `const char *hts_parse_reg64(const char *str, hts_pos_t *beg, hts_pos_t *end);`
+- L1200: `HTSLIB_EXPORT`
+- L1201: `const char *hts_parse_reg(const char *str, int *beg, int *end);`
+- L1264: `HTSLIB_EXPORT`
+- L1291: `HTSLIB_EXPORT`
+- L1292: `hts_itr_t *hts_itr_query(const hts_idx_t *idx, int tid, hts_pos_t beg, hts_pos_t end, hts_readrec_func *readrec);`
+- L1297: `HTSLIB_EXPORT`
+- L1298: `void hts_itr_destroy(hts_itr_t *iter);`
+- L1300: `typedef hts_itr_t *hts_itr_query_func(const hts_idx_t *idx, int tid, hts_pos_t beg, hts_pos_t end, hts_readrec_func *readrec);`
+- L1315: `HTSLIB_EXPORT`
+- L1316: `hts_itr_t *hts_itr_querys(const hts_idx_t *idx, const char *reg, hts_name2id_f getid, void *hdr, hts_itr_query_func *itr_query, hts_readrec_func *readrec);`
+- L1325: `HTSLIB_EXPORT`
+- L1326: `int hts_itr_next(BGZF *fp, hts_itr_t *iter, void *r, void *data) HTS_RESULT_USED;`
+- L1332: `typedef int hts_itr_multi_query_func(const hts_idx_t *idx, hts_itr_t *itr);`
+- L1333: `HTSLIB_EXPORT`
+- L1334: `int hts_itr_multi_bam(const hts_idx_t *idx, hts_itr_t *iter);`
+- L1335: `HTSLIB_EXPORT`
+- L1336: `int hts_itr_multi_cram(const hts_idx_t *idx, hts_itr_t *iter);`
+- L1353: `HTSLIB_EXPORT`
+- L1354: `hts_itr_t *hts_itr_regions(const hts_idx_t *idx, hts_reglist_t *reglist, int count, hts_name2id_f getid, void *hdr, hts_itr_multi_query_func *itr_specific, hts_readrec_func *readrec, hts_seek_func *seek, hts_tell_func *tell);`
+- L1362: `HTSLIB_EXPORT`
+- L1363: `int hts_itr_multi_next(htsFile *fd, hts_itr_t *iter, void *r);`
+- L1376: `HTSLIB_EXPORT`
+- L1377: `hts_reglist_t *hts_reglist_create(char **argv, int argc, int *r_count, void *hdr,  hts_name2id_f getid);`
+- L1383: `HTSLIB_EXPORT`
+- L1384: `void hts_reglist_free(hts_reglist_t *reglist, int count);`
+- L1389: `#define hts_itr_multi_destroy(iter) hts_itr_destroy(iter)`
+- L1397: `#define FT_UNKN   0`
+- L1398: `#define FT_GZ     1`
+- L1399: `#define FT_VCF    2`
+- L1400: `#define FT_VCF_GZ (FT_GZ|FT_VCF)`
+- L1401: `#define FT_BCF    (1<<2)`
+- L1402: `#define FT_BCF_GZ (FT_GZ|FT_BCF)`
+- L1403: `#define FT_STDIN  (1<<3)`
+- L1404: `HTSLIB_EXPORT`
+- L1405: `int hts_file_type(const char *fname);`
+- L1412: `struct errmod_t;`
+- L1413: `typedef struct errmod_t errmod_t;`
+- L1415: `HTSLIB_EXPORT`
+- L1416: `errmod_t *errmod_init(double depcorr);`
+- L1417: `HTSLIB_EXPORT`
+- L1418: `void errmod_destroy(errmod_t *em);`
+- L1426: `HTSLIB_EXPORT`
+- L1427: `int errmod_cal(const errmod_t *em, int n, int m, uint16_t *bases, float *q);`
+- L1435: `typedef struct probaln_par_t {`
+- L1464: `HTSLIB_EXPORT`
+- L1465: `int probaln_glocal(const uint8_t *ref, int l_ref, const uint8_t *query, int l_query, const uint8_t *iqual, const probaln_par_t *c, int *state, uint8_t *q);`
+- L1472: `struct hts_md5_context;`
+- L1473: `typedef struct hts_md5_context hts_md5_context;`
+- L1489: `HTSLIB_EXPORT`
+- L1490: `hts_md5_context *hts_md5_init(void);`
+- L1493: `HTSLIB_EXPORT`
+- L1494: `void hts_md5_update(hts_md5_context *ctx, const void *data, unsigned long size);`
+- L1497: `HTSLIB_EXPORT`
+- L1498: `void hts_md5_final(unsigned char *digest, hts_md5_context *ctx);`
+- L1503: `HTSLIB_EXPORT`
+- L1504: `void hts_md5_reset(hts_md5_context *ctx);`
+- L1509: `HTSLIB_EXPORT`
+- L1510: `void hts_md5_hex(char *hex, const unsigned char *digest);`
+- L1513: `HTSLIB_EXPORT`
+- L1514: `void hts_md5_destroy(hts_md5_context *ctx);`
+- L1516: `static inline int hts_reg2bin(hts_pos_t beg, hts_pos_t end, int min_shift, int n_lvls)`
+- L1525: `static inline int hts_bin_level(int bin) {`
+- L1535: `HTSLIB_EXPORT`
+- L1536: `uint32_t hts_crc32(uint32_t crc, const void *buf, size_t len);`
+- L1550: `static inline int hts_bin_bot(int bin, int n_lvls)`
+- L1557: `static inline hts_pos_t hts_bin_maxpos(int min_shift, int n_lvls)`
+- L1567: `static inline int ed_is_big(void)`
+- L1572: `static inline uint16_t ed_swap_2(uint16_t v)`
+- L1576: `static inline void *ed_swap_2p(void *x)`
+- L1581: `static inline uint32_t ed_swap_4(uint32_t v)`
+- L1586: `static inline void *ed_swap_4p(void *x)`
+- L1591: `static inline uint64_t ed_swap_8(uint64_t v)`
+- L1597: `static inline void *ed_swap_8p(void *x)`
+
+## `hts_defs.h`
+
+- L26: `#define HTSLIB_HTS_DEFS_H`
+- L34: `#define HTS_COMPILER_HAS(attribute) __has_attribute(attribute)`
+- L38: `#define HTS_GCC_AT_LEAST(major, minor) \`
+- L43: `#define HTS_COMPILER_HAS(attribute) 0`
+- L46: `#define HTS_GCC_AT_LEAST(major, minor) 0`
+- L50: `#define HTS_NONSTRING __attribute__ ((__nonstring__))`
+- L52: `#define HTS_NONSTRING`
+- L56: `#define HTS_NORETURN __attribute__ ((__noreturn__))`
+- L58: `#define HTS_NORETURN`
+- L62: `#define HTS_ACCESS(access_mode, ...) __attribute__ ((access(access_mode, __VA_ARGS__)))`
+- L64: `#define HTS_ACCESS(access_mode, ...)`
+- L71: `#define HTS_OPT3 __attribute__((optimize("O3")))`
+- L73: `#define HTS_OPT3`
+- L77: `#define HTS_ALIGN32 __attribute__((aligned(32)))`
+- L79: `#define HTS_ALIGN32`
+- L84: `#define HTS_RESULT_USED __attribute__ ((__warn_unused_result__))`
+- L86: `#define HTS_RESULT_USED`
+- L90: `#define HTS_UNUSED __attribute__ ((__unused__))`
+- L92: `#define HTS_UNUSED`
+- L96: `#define HTS_DEPRECATED(message) __attribute__ ((__deprecated__ (message)))`
+- L98: `#define HTS_DEPRECATED(message) __attribute__ ((__deprecated__))`
+- L100: `#define HTS_DEPRECATED(message)`
+- L104: `#define HTS_DEPRECATED_ENUM(message) __attribute__ ((__deprecated__ (message)))`
+- L106: `#define HTS_DEPRECATED_ENUM(message)`
+- L116: `#define HTS_PRINTF_FMT __MINGW_PRINTF_FORMAT`
+- L118: `#define HTS_PRINTF_FMT printf`
+- L122: `#define HTS_FORMAT(type, idx, first) __attribute__((__format__ (type, idx, first)))`
+- L124: `#define HTS_FORMAT(type, idx, first)`
+- L129: `#define HTSLIB_EXPORT __declspec(dllexport)`
+- L131: `#define HTSLIB_EXPORT`
+- L134: `#define HTSLIB_EXPORT __attribute__((__visibility__("default")))`
+- L136: `#define HTSLIB_EXPORT __global`
+- L138: `#define HTSLIB_EXPORT`
+- L144: `static inline void hts_prefetch(void *p) {`
+- L148: `static inline void hts_prefetch(void *p) {`
+
+## `hts_endian.h`
+
+- L27: `#define HTS_ENDIAN_H`
+- L43: `#    define HTS_x86  /* x86 and x86_64 platform */`
+- L56: `#        define HTS_LITTLE_ENDIAN`
+- L69: `#        define HTS_BIG_ENDIAN`
+- L96: `#        define HTS_ALLOW_UNALIGNED 1`
+- L98: `#        define HTS_ALLOW_UNALIGNED 0`
+- L106: `typedef uint16_t uint16_u __attribute__ ((__aligned__ (1)));`
+- L107: `typedef uint32_t uint32_u __attribute__ ((__aligned__ (1)));`
+- L108: `typedef uint64_t uint64_u __attribute__ ((__aligned__ (1)));`
+- L110: `typedef uint16_t uint16_u;`
+- L111: `typedef uint32_t uint32_u;`
+- L112: `typedef uint64_t uint64_u;`
+- L120: `static inline uint8_t le_to_u8(const uint8_t *buf) {`
+- L129: `static inline uint16_t le_to_u16(const uint8_t *buf) {`
+- L142: `static inline uint32_t le_to_u32(const uint8_t *buf) {`
+- L158: `static inline uint64_t le_to_u64(const uint8_t *buf) {`
+- L177: `static inline void u16_to_le(uint16_t val, uint8_t *buf) {`
+- L190: `static inline void u32_to_le(uint32_t val, uint8_t *buf) {`
+- L205: `static inline void u64_to_le(uint64_t val, uint8_t *buf) {`
+- L230: `static inline int8_t le_to_i8(const uint8_t *buf) {`
+- L240: `static inline int16_t le_to_i16(const uint8_t *buf) {`
+- L251: `static inline int32_t le_to_i32(const uint8_t *buf) {`
+- L262: `static inline int64_t le_to_i64(const uint8_t *buf) {`
+- L274: `static inline void i16_to_le(int16_t val, uint8_t *buf) {`
+- L282: `static inline void i32_to_le(int32_t val, uint8_t *buf) {`
+- L290: `static inline void i64_to_le(int64_t val, uint8_t *buf) {`
+- L308: `static inline float le_to_float(const uint8_t *buf) {`
+- L324: `static inline double le_to_double(const uint8_t *buf) {`
+- L338: `static inline void float_to_le(float val, uint8_t *buf) {`
+- L352: `static inline void double_to_le(double val, uint8_t *buf) {`
+
+## `hts_expr.h`
+
+- L26: `#define HTS_EXPR_H`
+- L53: `typedef struct hts_expr_val_t {`
+- L65: `static inline int hts_expr_val_exists(hts_expr_val_t *v) {`
+- L71: `static inline int hts_expr_val_existsT(hts_expr_val_t *v) {`
+- L76: `static inline void hts_expr_val_undef(hts_expr_val_t *v) {`
+- L84: `static inline void hts_expr_val_free(hts_expr_val_t *f) {`
+- L89: `typedef struct hts_filter_t hts_filter_t;`
+- L92: `#define HTS_EXPR_VAL_INIT {0, 0, KS_INITIALIZE, 0}`
+- L98: `HTSLIB_EXPORT`
+- L99: `hts_filter_t *hts_filter_init(const char *str);`
+- L104: `HTSLIB_EXPORT`
+- L105: `void hts_filter_free(hts_filter_t *filt);`
+- L108: `typedef int (hts_expr_sym_func)(void *data, char *str, char **end,`
+- L129: `HTSLIB_EXPORT`
+- L145: `HTSLIB_EXPORT`
+
+## `hts_log.h`
+
+- L30: `#define HTS_LOG_H`
+- L39: `enum htsLogLevel {`
+- L49: `HTSLIB_EXPORT`
+- L50: `void hts_set_log_level(enum htsLogLevel level);`
+- L53: `HTSLIB_EXPORT`
+- L54: `enum htsLogLevel hts_get_log_level(void);`
+- L61: `HTSLIB_EXPORT`
+- L74: `HTSLIB_EXPORT`
+- L79: `#define hts_log_error(...) hts_log(HTS_LOG_ERROR, __func__, __VA_ARGS__)`
+- L82: `#define hts_log_warning(...) hts_log(HTS_LOG_WARNING, __func__, __VA_ARGS__)`
+- L85: `#define hts_log_info(...) hts_log(HTS_LOG_INFO, __func__, __VA_ARGS__)`
+- L88: `#define hts_log_debug(...) hts_log(HTS_LOG_DEBUG, __func__, __VA_ARGS__)`
+- L91: `#define hts_log_trace(...) hts_log(HTS_LOG_TRACE, __func__, __VA_ARGS__)`
+
+## `hts_os.h`
+
+- L27: `#define HTSLIB_HTS_OS_H`
+- L40: `HTSLIB_EXPORT`
+- L41: `void hts_srand48(long seed);`
+- L43: `HTSLIB_EXPORT`
+- L44: `double hts_erand48(unsigned short xseed[3]);`
+- L46: `HTSLIB_EXPORT`
+- L47: `double hts_drand48(void);`
+- L49: `HTSLIB_EXPORT`
+- L50: `long hts_lrand48(void);`
+- L54: `#define srand48(S) hts_srand48((S))`
+- L55: `#define erand48(X) hts_erand48((X))`
+- L56: `#define drand48() hts_drand48()`
+- L57: `#define lrand48() hts_lrand48()`
+- L62: `extern int is_cygpty(int fd);`
+- L71: `#define mkdir(filename,mode) mkdir((filename))`
+- L76: `#define srandom srand`
+- L77: `#define random rand`
+- L83: `#define ssize_t intptr_t`
+
+## `kbitset.h`
+
+- L27: `#define KBITSET_H`
+- L51: `struct kbitset_t;`
+- L52: `void process(struct kbitset_t *bset);`
+- L59: `#define KBS_ELTBITS (CHAR_BIT * sizeof (unsigned long))`
+- L60: `#define KBS_ELT(i)  ((i) / KBS_ELTBITS)`
+- L61: `#define KBS_MASK(i) (1UL << ((i) % KBS_ELTBITS))`
+- L63: `typedef struct kbitset_t {`
+- L70: `static inline unsigned long kbs_last_mask(size_t ni)`
+- L78: `static inline kbitset_t *kbs_init2(size_t ni, int fill)`
+- L93: `static inline kbitset_t *kbs_init(size_t ni)`
+- L100: `static inline int kbs_resize2(kbitset_t **bsp, size_t ni_new, int fill)`
+- L125: `static inline int kbs_resize(kbitset_t **bsp, size_t ni_new)`
+- L131: `static inline void kbs_destroy(kbitset_t *bs)`
+- L137: `static inline void kbs_clear(kbitset_t *bs)`
+- L143: `static inline void kbs_insert_all(kbitset_t *bs)`
+- L150: `static inline void kbs_insert(kbitset_t *bs, int i)`
+- L156: `static inline void kbs_delete(kbitset_t *bs, int i)`
+- L162: `static inline int kbs_exists(const kbitset_t *bs, int i)`
+- L167: `typedef struct kbitset_iter_t {`
+- L174: `static inline void kbs_start(kbitset_iter_t *itr)`
+- L182: `static inline int kbs_next(const kbitset_t *bs, kbitset_iter_t *itr)`
+
+## `kfunc.h`
+
+- L28: `#define HTSLIB_KFUNC_H`
+- L40: `HTSLIB_EXPORT`
+- L41: `double kf_lgamma(double z);`
+- L47: `HTSLIB_EXPORT`
+- L48: `double kf_erfc(double x);`
+- L63: `HTSLIB_EXPORT`
+- L64: `double kf_gammap(double s, double z);`
+- L65: `HTSLIB_EXPORT`
+- L66: `double kf_gammaq(double s, double z);`
+- L75: `HTSLIB_EXPORT`
+- L76: `double kf_betai(double a, double b, double x);`
+- L84: `HTSLIB_EXPORT`
+- L85: `double kt_fisher_exact(int n11, int n12, int n21, int n22, double *_left, double *_right, double *two);`
+
+## `khash.h`
+
+- L32: `int main() {`
+- L119: `#define __AC_KHASH_H`
+- L127: `#define AC_VERSION_KHASH_H "0.2.8"`
+- L139: `typedef unsigned int khint32_t;`
+- L141: `typedef unsigned long khint32_t;`
+- L145: `typedef unsigned long khint64_t;`
+- L147: `typedef unsigned long long khint64_t;`
+- L152: `#define kh_inline __inline`
+- L154: `#define kh_inline inline`
+- L160: `#define klib_unused __attribute__ ((__unused__))`
+- L162: `#define klib_unused`
+- L166: `typedef khint32_t khint_t;`
+- L167: `typedef khint_t khiter_t;`
+- L169: `#define __ac_isempty(flag, i) ((flag[i>>4]>>((i&0xfU)<<1))&2)`
+- L170: `#define __ac_isdel(flag, i) ((flag[i>>4]>>((i&0xfU)<<1))&1)`
+- L171: `#define __ac_iseither(flag, i) ((flag[i>>4]>>((i&0xfU)<<1))&3)`
+- L172: `#define __ac_set_isdel_false(flag, i) (flag[i>>4]&=~(1ul<<((i&0xfU)<<1)))`
+- L173: `#define __ac_set_isempty_false(flag, i) (flag[i>>4]&=~(2ul<<((i&0xfU)<<1)))`
+- L174: `#define __ac_set_isboth_false(flag, i) (flag[i>>4]&=~(3ul<<((i&0xfU)<<1)))`
+- L175: `#define __ac_set_isdel_true(flag, i) (flag[i>>4]|=1ul<<((i&0xfU)<<1))`
+- L177: `#define __ac_fsize(m) ((m) < 16? 1 : (m)>>4)`
+- L180: `#define kroundup32(x) (--(x), (x)|=(x)>>1, (x)|=(x)>>2, (x)|=(x)>>4, (x)|=(x)>>8, (x)|=(x)>>16, ++(x))`
+- L184: `#define kcalloc(N,Z) calloc(N,Z)`
+- L187: `#define kmalloc(Z) malloc(Z)`
+- L190: `#define krealloc(P,Z) realloc(P,Z)`
+- L193: `#define kfree(P) free(P)`
+- L198: `#define __KHASH_TYPE(name, khkey_t, khval_t) \`
+- L199: `typedef struct kh_##name##_s { \`
+- L206: `#define __KHASH_PROTOTYPES(name, khkey_t, khval_t)	 					\`
+- L215: `#define __KHASH_IMPL(name, SCOPE, khkey_t, khval_t, kh_is_map, __hash_func, __hash_equal) \`
+- L415: `#define KHASH_DECLARE(name, khkey_t, khval_t)		 					\`
+- L419: `#define KHASH_INIT2(name, SCOPE, khkey_t, khval_t, kh_is_map, __hash_func, __hash_equal) \`
+- L423: `#define KHASH_INIT(name, khkey_t, khval_t, kh_is_map, __hash_func, __hash_equal) \`
+- L433: `#define kh_int_hash_func(key) (khint32_t)(key)`
+- L437: `#define kh_int_hash_equal(a, b) ((a) == (b))`
+- L443: `#define kh_int64_hash_func(key) (khint32_t)((key)>>33^(key)^(key)<<11)`
+- L447: `#define kh_int64_hash_equal(a, b) ((a) == (b))`
+- L480: `#define kh_str_hash_func(key) __ac_FNV1a_hash_string(key)`
+- L485: `#define kh_str_hash_equal(a, b) (strcmp(a, b) == 0)`
+- L522: `#define kh_kstr_hash_func(key) __ac_FNV1a_hash_kstring(key)`
+- L526: `#define kh_kstr_hash_equal(a, b) ((a).l == (b).l && strncmp((a).s, (b).s, (a).l) == 0)`
+- L538: `#define kh_int_hash_func2(key) __ac_Wang_hash((khint_t)(key))`
+- L548: `#define khash_t(name) kh_##name##_t`
+- L555: `#define kh_init(name) kh_init_##name()`
+- L562: `#define kh_destroy(name, h) kh_destroy_##name(h)`
+- L569: `#define kh_clear(name, h) kh_clear_##name(h)`
+- L577: `#define kh_resize(name, h, s) kh_resize_##name(h, s)`
+- L592: `#define kh_grow_to_fit(name, h, n) kh_grow_to_fit_##name(h, n)`
+- L605: `#define kh_put(name, h, k, r) kh_put_##name(h, k, r)`
+- L614: `#define kh_get(name, h, k) kh_get_##name(h, k)`
+- L622: `#define kh_del(name, h, k) kh_del_##name(h, k)`
+- L630: `#define kh_exist(h, x) (!__ac_iseither((h)->flags, (x)))`
+- L638: `#define kh_key(h, x) ((h)->keys[x])`
+- L647: `#define kh_val(h, x) ((h)->vals[x])`
+- L652: `#define kh_value(h, x) ((h)->vals[x])`
+- L659: `#define kh_begin(h) (khint_t)(0)`
+- L666: `#define kh_end(h) ((h)->n_buckets)`
+- L673: `#define kh_size(h) ((h)->size)`
+- L680: `#define kh_n_buckets(h) ((h)->n_buckets)`
+- L689: `#define kh_foreach(h, kvar, vvar, code) { khint_t __i;		\`
+- L703: `#define kh_foreach_value(h, vvar, code) { khint_t __i;		\`
+- L720: `#define kh_stats(name, h, empty, deleted, hist_size, hist) \`
+- L729: `#define KHASH_SET_INIT_INT(name)										\`
+- L737: `#define KHASH_MAP_INIT_INT(name, khval_t)								\`
+- L744: `#define KHASH_SET_INIT_INT64(name)										\`
+- L752: `#define KHASH_MAP_INIT_INT64(name, khval_t)								\`
+- L755: `typedef const char *kh_cstr_t;`
+- L760: `#define KHASH_SET_INIT_STR(name)										\`
+- L768: `#define KHASH_MAP_INIT_STR(name, khval_t)								\`
+- L775: `#define KHASH_SET_INIT_KSTR(name)										\`
+- L783: `#define KHASH_MAP_INIT_KSTR(name, khval_t)								\`
+
+## `khash_str2int.h`
+
+- L26: `#define HTSLIB_KHASH_STR2INT_H`
+- L36: `static inline void *khash_str2int_init(void)`
+- L44: `static inline void khash_str2int_destroy(void *_hash)`
+- L53: `static inline void khash_str2int_destroy_free(void *_hash)`
+- L66: `static inline int khash_str2int_has_key(void *_hash, const char *str)`
+- L78: `static inline int khash_str2int_get(void *_hash, const char *str, int *value)`
+- L96: `static inline int khash_str2int_inc(void *_hash, const char *str)`
+- L114: `static inline int khash_str2int_set(void *_hash, const char *str, int value)`
+- L129: `static inline int khash_str2int_size(void *_hash)`
+
+## `klist.h`
+
+- L28: `#define _AC_KLIST_H`
+- L34: `#define klib_unused __attribute__ ((__unused__))`
+- L36: `#define klib_unused`
+- L40: `#define KMEMPOOL_INIT2(SCOPE, name, kmptype_t, kmpfree_f)				\`
+- L41: `typedef struct {													\`
+- L69: `#define KMEMPOOL_INIT(name, kmptype_t, kmpfree_f)						\`
+- L72: `#define kmempool_t(name) kmp_##name##_t`
+- L73: `#define kmp_init(name) kmp_init_##name()`
+- L74: `#define kmp_destroy(name, mp) kmp_destroy_##name(mp)`
+- L75: `#define kmp_alloc(name, mp) kmp_alloc_##name(mp)`
+- L76: `#define kmp_free(name, mp, p) kmp_free_##name(mp, p)`
+- L78: `#define KLIST_INIT2(SCOPE, name, kltype_t, kmpfree_t)					\`
+- L79: `struct __kl1_##name {												\`
+- L81: `struct __kl1_##name *next;										\`
+- L83: `typedef struct __kl1_##name kl1_##name;								\`
+- L85: `typedef struct {													\`
+- L121: `#define KLIST_INIT(name, kltype_t, kmpfree_t)							\`
+- L124: `#define kliter_t(name) kl1_##name`
+- L125: `#define klist_t(name) kl_##name##_t`
+- L126: `#define kl_val(iter) ((iter)->data)`
+- L127: `#define kl_next(iter) ((iter)->next)`
+- L128: `#define kl_begin(kl) ((kl)->head)`
+- L129: `#define kl_end(kl) ((kl)->tail)`
+- L131: `#define kl_init(name) kl_init_##name()`
+- L132: `#define kl_destroy(name, kl) kl_destroy_##name(kl)`
+- L133: `#define kl_pushp(name, kl) kl_pushp_##name(kl)`
+- L134: `#define kl_shift(name, kl, d) kl_shift_##name(kl, d)`
+
+## `knetfile.h`
+
+- L28: `#define KNETFILE_H`
+- L37: `#define netread(fd, ptr, len) read(fd, ptr, len)`
+- L38: `#define netwrite(fd, ptr, len) write(fd, ptr, len)`
+- L39: `#define netclose(fd) close(fd)`
+- L42: `#define netread(fd, ptr, len) recv(fd, ptr, len, 0)`
+- L43: `#define netwrite(fd, ptr, len) send(fd, ptr, len, 0)`
+- L44: `#define netclose(fd) closesocket(fd)`
+- L50: `#define HTSLIB_SSIZE_T`
+- L51: `#define ssize_t intptr_t`
+- L56: `#define KNF_TYPE_LOCAL 1`
+- L57: `#define KNF_TYPE_FTP   2`
+- L58: `#define KNF_TYPE_HTTP  3`
+- L61: `typedef struct knetFile_s {`
+- L76: `#define knet_tell(fp) ((fp)->offset)`
+- L77: `#define knet_fileno(fp) ((fp)->fd)`
+- L83: `HTSLIB_EXPORT`
+- L84: `knetFile *knet_open(const char *fn, const char *mode) HTS_DEPRECATED("Please use hopen instead");`
+- L89: `HTSLIB_EXPORT`
+- L90: `knetFile *knet_dopen(int fd, const char *mode) HTS_DEPRECATED("Please use hdopen instead");`
+- L96: `HTSLIB_EXPORT`
+- L97: `ssize_t knet_read(knetFile *fp, void *buf, size_t len) HTS_DEPRECATED("Please use hread instead");`
+- L103: `HTSLIB_EXPORT`
+- L104: `off_t knet_seek(knetFile *fp, off_t off, int whence) HTS_DEPRECATED("Please use hseek instead");`
+- L105: `HTSLIB_EXPORT`
+- L106: `int knet_close(knetFile *fp) HTS_DEPRECATED("Please use hclose instead");`
+
+## `kroundup.h`
+
+- L27: `#define KROUNDUP_H`
+- L30: `#define k_signed_type(x) (!(-((x) * 0 + 1) > 0))`
+- L44: `#define k_high_bit_set(x) ((((x) >> (sizeof(x) * 8 - 1 - k_signed_type(x))) & 1))`
+- L54: `#define kroundup64(x) ((x) > 0 ?                                        \`
+- L70: `#define kroundup32(x) kroundup64(x)`
+- L73: `#define kroundup_size_t(x) kroundup64(x)`
+
+## `kseq.h`
+
+- L28: `#define AC_KSEQ_H`
+- L38: `#define klib_unused __attribute__ ((__unused__))`
+- L40: `#define klib_unused`
+- L44: `#define KS_SEP_SPACE 0 // isspace(): \t, \n, \v, \f, \r`
+- L45: `#define KS_SEP_TAB   1 // isspace() && !' '`
+- L46: `#define KS_SEP_LINE  2 // line separator: "\n" (Unix) or "\r\n" (Windows)`
+- L47: `#define KS_SEP_MAX   2`
+- L49: `#define __KS_TYPE(type_t) \`
+- L50: `typedef struct __kstream_t { \`
+- L58: `#define ks_err(ks) ((ks)->end == -1)`
+- L59: `#define ks_eof(ks) ((ks)->is_eof && (ks)->begin >= (ks)->end)`
+- L60: `#define ks_rewind(ks) ((ks)->is_eof = (ks)->begin = (ks)->end = 0)`
+- L62: `#define __KS_BASIC(SCOPE, type_t, __bufsize) \`
+- L77: `#define __KS_INLINED(__read) \`
+- L78: `static inline klib_unused int ks_getc(kstream_t *ks) \`
+- L91: `static inline klib_unused int ks_getuntil(kstream_t *ks, int delimiter, kstring_t *str, int *dret) \`
+- L94: `#define __KS_GETUNTIL(SCOPE, __read) \`
+- L146: `#define KSTREAM_INIT2(SCOPE, type_t, __read, __bufsize) \`
+- L152: `#define KSTREAM_INIT(type_t, __read, __bufsize) KSTREAM_INIT2(static, type_t, __read, __bufsize)`
+- L154: `#define KSTREAM_DECLARE(type_t, __read) \`
+- L156: `extern int ks_getuntil2(kstream_t *ks, int delimiter, kstring_t *str, int *dret, int append); \`
+- L157: `extern kstream_t *ks_init(type_t f); \`
+- L158: `extern void ks_destroy(kstream_t *ks); \`
+- L165: `#define kseq_rewind(ks) ((ks)->last_char = (ks)->f->is_eof = (ks)->f->begin = (ks)->f->end = 0)`
+- L167: `#define __KSEQ_BASIC(SCOPE, type_t)										\`
+- L189: `#define __KSEQ_READ(SCOPE) \`
+- L233: `#define __KSEQ_TYPE(type_t)						\`
+- L234: `typedef struct {							\`
+- L240: `#define KSEQ_INIT2(SCOPE, type_t, __read)		\`
+- L246: `#define KSEQ_INIT(type_t, __read) KSEQ_INIT2(static, type_t, __read)`
+- L248: `#define KSEQ_DECLARE(type_t) \`
+- L251: `extern kseq_t *kseq_init(type_t fd); \`
+- L252: `void kseq_destroy(kseq_t *ks); \`
+- L253: `int kseq_read(kseq_t *seq);`
+
+## `ksort.h`
+
+- L63: `#define AC_KSORT_H`
+- L71: `#define klib_unused __attribute__ ((__unused__))`
+- L73: `#define klib_unused`
+- L85: `HTSLIB_EXPORT`
+- L86: `extern double hts_drand48(void);`
+- L88: `typedef struct {`
+- L93: `#define KSORT_SWAP(type_t, a, b) { type_t t=(a); (a)=(b); (b)=t; }`
+- L95: `#define KSORT_INIT(name, type_t, __sort_lt)	KSORT_INIT_(_ ## name, , type_t, __sort_lt)`
+- L96: `#define KSORT_INIT_STATIC(name, type_t, __sort_lt)	KSORT_INIT_(_ ## name, static klib_unused, type_t, __sort_lt)`
+- L97: `#define KSORT_INIT2(name, SCOPE, type_t, __sort_lt)	KSORT_INIT_(_ ## name, SCOPE, type_t, __sort_lt)`
+- L99: `#define KSORT_INIT_(name, SCOPE, type_t, __sort_lt)						\`
+- L174: `static inline void __ks_insertsort##name(type_t *s, type_t *t)		\`
+- L212: `else if (n == 2) {												\`
+- L295: `#define ks_mergesort(name, n, a, t) ks_mergesort_##name(n, a, t)`
+- L296: `#define ks_introsort(name, n, a) ks_introsort_##name(n, a)`
+- L297: `#define ks_combsort(name, n, a) ks_combsort_##name(n, a)`
+- L298: `#define ks_heapsort(name, n, a) ks_heapsort_##name(n, a)`
+- L299: `#define ks_heapmake(name, n, a) ks_heapmake_##name(n, a)`
+- L300: `#define ks_heapadjust(name, i, n, a) ks_heapadjust_##name(i, n, a)`
+- L301: `#define ks_ksmall(name, n, a, k) ks_ksmall_##name(n, a, k)`
+- L302: `#define ks_shuffle(name, n, a) ks_shuffle_##name(n, a)`
+- L304: `#define ks_lt_generic(a, b) ((a) < (b))`
+- L305: `#define ks_lt_str(a, b) (strcmp((a), (b)) < 0)`
+- L307: `typedef const char *ksstr_t;`
+- L309: `#define KSORT_INIT_GENERIC(type_t) KSORT_INIT_(_ ## type_t, , type_t, ks_lt_generic)`
+- L310: `#define KSORT_INIT_STR KSORT_INIT(str, ksstr_t, ks_lt_str)`
+- L312: `#define KSORT_INIT_STATIC_GENERIC(type_t) KSORT_INIT_(_ ## type_t, static klib_unused, type_t, ks_lt_generic)`
+- L313: `#define KSORT_INIT_STATIC_STR KSORT_INIT_STATIC(str, ksstr_t, ks_lt_str)`
+- L315: `#define KSORT_INIT2_GENERIC(type_t, SCOPE) KSORT_INIT_(_ ## type_t, SCOPE, type_t, ks_lt_generic)`
+- L316: `#define KSORT_INIT2_STR KSORT_INIT2(str, SCOPE, ksstr_t, ks_lt_str)`
+
+## `kstring.h`
+
+- L28: `#define KSTRING_H`
+- L44: `#define KS_ATTR_PRINTF(fmt, arg) __attribute__((__format__ (__MINGW_PRINTF_FORMAT, fmt, arg)))`
+- L46: `#define KS_ATTR_PRINTF(fmt, arg) __attribute__((__format__ (__printf__, fmt, arg)))`
+- L49: `#define KS_ATTR_PRINTF(fmt, arg)`
+- L54: `#define HAVE___BUILTIN_CLZ 1`
+- L61: `#define HTSLIB_SSIZE_T`
+- L62: `#define ssize_t intptr_t`
+- L66: `#define HTSLIB_EOVERFLOW`
+- L67: `#define EOVERFLOW ERANGE`
+- L79: `#define KSTRING_T kstring_t`
+- L80: `typedef struct kstring_t {`
+- L86: `typedef struct ks_tokaux_t {`
+- L96: `HTSLIB_EXPORT`
+- L97: `int kvsprintf(kstring_t *s, const char *fmt, va_list ap) KS_ATTR_PRINTF(2,0);`
+- L99: `HTSLIB_EXPORT`
+- L100: `int ksprintf(kstring_t *s, const char *fmt, ...) KS_ATTR_PRINTF(2,3);`
+- L102: `HTSLIB_EXPORT`
+- L103: `int kputd(double d, kstring_t *s); // custom %g only handler`
+- L105: `HTSLIB_EXPORT`
+- L106: `int ksplit_core(char *s, int delimiter, int *_max, int **_offsets);`
+- L108: `HTSLIB_EXPORT`
+- L109: `char *kstrstr(const char *str, const char *pat, int **prep);`
+- L111: `HTSLIB_EXPORT`
+- L112: `char *kstrnstr(const char *str, const char *pat, int n, int **prep);`
+- L114: `HTSLIB_EXPORT`
+- L115: `void *kmemmem(const void *str, int n, const void *pat, int m, int **prep);`
+- L121: `HTSLIB_EXPORT`
+- L122: `char *kstrtok(const char *str, const char *sep, ks_tokaux_t *aux);`
+- L128: `typedef char *kgets_func(char *, int, void *);`
+- L129: `HTSLIB_EXPORT`
+- L130: `int kgetline(kstring_t *s, kgets_func *fgets_fn, void *fp);`
+- L133: `HTSLIB_EXPORT`
+- L134: `int kfgetline(kstring_t *s, FILE *fp);`
+- L140: `typedef ssize_t kgets_func2(char *, size_t, void *);`
+- L141: `HTSLIB_EXPORT`
+- L142: `int kgetline2(kstring_t *s, kgets_func2 *fgets_fn, void *fp);`
+- L149: `#define KS_INITIALIZE { 0, 0, NULL }`
+- L157: `static inline void ks_initialize(kstring_t *s)`
+- L164: `static inline int ks_resize(kstring_t *s, size_t size)`
+- L179: `static inline int ks_expand(kstring_t *s, size_t expansion)`
+- L188: `static inline char *ks_str(kstring_t *s)`
+- L199: `static inline const char *ks_c_str(kstring_t *s)`
+- L204: `static inline size_t ks_len(kstring_t *s)`
+- L215: `static inline kstring_t *ks_clear(kstring_t *s)`
+- L225: `static inline char *ks_release(kstring_t *s)`
+- L234: `static inline void ks_free(kstring_t *s)`
+- L242: `static inline int kputsn(const char *p, size_t l, kstring_t *s)`
+- L253: `static inline int kputs(const char *p, kstring_t *s)`
+- L259: `static inline int kputc(int c, kstring_t *s)`
+- L268: `static inline int kputc_(int c, kstring_t *s)`
+- L276: `static inline int kputsn_(const void *p, size_t l, kstring_t *s)`
+- L286: `static inline int kputuw(unsigned x, kstring_t *s)`
+- L371: `static inline int kputw(int c, kstring_t *s)`
+- L384: `static inline int kputll(long long c, kstring_t *s)`
+- L445: `static inline int kputl(long c, kstring_t *s) {`
+- L453: `static inline int *ksplit(kstring_t *s, int delimiter, int *n)`
+- L469: `static inline int kinsert_char(char c, size_t pos, kstring_t *s)`
+- L492: `static inline int kinsert_str(const char *str, size_t pos, kstring_t *s)`
+
+## `regidx.h`
+
+- L65: `#define HTSLIB_REGIDX_H`
+- L80: `#define REGIDX_MAX (1ULL << 35)`
+- L82: `typedef struct regidx_t regidx_t;`
+- L83: `typedef struct regitr_t`
+- L92: `#define regitr_payload(itr,type_t) (*((type_t*)(itr)->payload))`
+- L95: `#define REGITR_START(itr) (itr).beg`
+- L96: `#define REGITR_END(itr)   (itr).end`
+- L97: `#define REGITR_PAYLOAD(itr,type_t) ((type_t*)(itr).payload)`
+- L98: `#define REGITR_OVERLAP(itr,from,to) regidx_overlap((itr));`
+- L112: `typedef int  (*regidx_parse_f)(const char *line, char **chr_beg, char **chr_end, hts_pos_t *beg, hts_pos_t *end, void *payload, void *usr);`
+- L113: `typedef void (*regidx_free_f)(void *payload);`
+- L120: `HTSLIB_EXPORT`
+- L121: `int regidx_parse_bed(const char*,char**,char**,hts_pos_t*,hts_pos_t*,void*,void*);   // CHROM or whitespace-sepatated CHROM,FROM,TO (0-based,right-open)`
+- L122: `HTSLIB_EXPORT`
+- L123: `int regidx_parse_tab(const char*,char**,char**,hts_pos_t*,hts_pos_t*,void*,void*);   // CHROM or whitespace-separated CHROM,POS (1-based, inclusive)`
+- L124: `HTSLIB_EXPORT`
+- L125: `int regidx_parse_reg(const char*,char**,char**,hts_pos_t*,hts_pos_t*,void*,void*);   // CHROM, CHROM:POS, CHROM:FROM-TO, CHROM:FROM- (1-based, inclusive)`
+- L126: `HTSLIB_EXPORT`
+- L127: `int regidx_parse_vcf(const char*,char**,char**,hts_pos_t*,hts_pos_t*,void*,void*);`
+- L147: `HTSLIB_EXPORT`
+- L148: `regidx_t *regidx_init(const char *fname, regidx_parse_f parsef, regidx_free_f freef, size_t payload_size, void *usr);`
+- L149: `HTSLIB_EXPORT`
+- L150: `regidx_t *regidx_init_string(const char *string, regidx_parse_f parsef, regidx_free_f freef, size_t payload_size, void *usr);`
+- L155: `HTSLIB_EXPORT`
+- L156: `void regidx_destroy(regidx_t *idx);`
+- L166: `HTSLIB_EXPORT`
+- L167: `int regidx_overlap(regidx_t *idx, const char *chr, hts_pos_t beg, hts_pos_t end, regitr_t *itr);`
+- L176: `HTSLIB_EXPORT`
+- L177: `int regidx_insert(regidx_t *idx, char *line);`
+- L178: `HTSLIB_EXPORT`
+- L179: `int regidx_insert_list(regidx_t *idx, char *line, char delim);`
+- L180: `HTSLIB_EXPORT`
+- L181: `int regidx_push(regidx_t *idx, char *chr_beg, char *chr_end, hts_pos_t beg, hts_pos_t end, void *payload);`
+- L186: `HTSLIB_EXPORT`
+- L187: `char **regidx_seq_names(regidx_t *idx, int *n);`
+- L193: `HTSLIB_EXPORT`
+- L194: `int regidx_seq_nregs(regidx_t *idx, const char *seq);`
+- L196: `HTSLIB_EXPORT`
+- L197: `int regidx_nregs(regidx_t *idx);`
+- L211: `HTSLIB_EXPORT`
+- L212: `regitr_t *regitr_init(regidx_t *idx);`
+- L213: `HTSLIB_EXPORT`
+- L214: `void regitr_destroy(regitr_t *itr);`
+- L215: `HTSLIB_EXPORT`
+- L216: `void regitr_reset(regidx_t *idx, regitr_t *itr);`
+- L222: `HTSLIB_EXPORT`
+- L223: `int regitr_overlap(regitr_t *itr);`
+- L229: `HTSLIB_EXPORT`
+- L230: `int regitr_loop(regitr_t *itr);`
+- L235: `HTSLIB_EXPORT`
+- L236: `void regitr_copy(regitr_t *dst, regitr_t *src);`
+
+## `sam.h`
+
+- L28: `#define HTSLIB_SAM_H`
+- L39: `#define HTSLIB_SSIZE_T`
+- L40: `#define ssize_t intptr_t`
+- L48: `#define SAM_FORMAT_VERSION "1.6"`
+- L59: `typedef struct sam_hrecs_t sam_hrecs_t;`
+- L80: `typedef struct sam_hdr_t {`
+- L84: `const int8_t *cigar_tab HTS_DEPRECATED("Use bam_cigar_table[] instead");`
+- L95: `typedef sam_hdr_t bam_hdr_t;`
+- L101: `#define BAM_CMATCH      0`
+- L102: `#define BAM_CINS        1`
+- L103: `#define BAM_CDEL        2`
+- L104: `#define BAM_CREF_SKIP   3`
+- L105: `#define BAM_CSOFT_CLIP  4`
+- L106: `#define BAM_CHARD_CLIP  5`
+- L107: `#define BAM_CPAD        6`
+- L108: `#define BAM_CEQUAL      7`
+- L109: `#define BAM_CDIFF       8`
+- L110: `#define BAM_CBACK       9`
+- L112: `#define BAM_CIGAR_STR   "MIDNSHP=XB"`
+- L113: `#define BAM_CIGAR_SHIFT 4`
+- L114: `#define BAM_CIGAR_MASK  0xf`
+- L115: `#define BAM_CIGAR_TYPE  0x3C1A7`
+- L121: `HTSLIB_EXPORT`
+- L124: `#define bam_cigar_op(c) ((c)&BAM_CIGAR_MASK)`
+- L125: `#define bam_cigar_oplen(c) ((c)>>BAM_CIGAR_SHIFT)`
+- L130: `#define bam_cigar_opchr(c) (BAM_CIGAR_STR "??????" [bam_cigar_op(c)])`
+- L131: `#define bam_cigar_gen(l, o) ((l)<<BAM_CIGAR_SHIFT|(o))`
+- L152: `#define bam_cigar_type(o) (BAM_CIGAR_TYPE>>((o)<<1)&3) // bit 1: consume query; bit 2: consume reference`
+- L155: `#define BAM_FPAIRED        1`
+- L157: `#define BAM_FPROPER_PAIR   2`
+- L159: `#define BAM_FUNMAP         4`
+- L161: `#define BAM_FMUNMAP        8`
+- L163: `#define BAM_FREVERSE      16`
+- L165: `#define BAM_FMREVERSE     32`
+- L167: `#define BAM_FREAD1        64`
+- L169: `#define BAM_FREAD2       128`
+- L171: `#define BAM_FSECONDARY   256`
+- L173: `#define BAM_FQCFAIL      512`
+- L175: `#define BAM_FDUP        1024`
+- L177: `#define BAM_FSUPPLEMENTARY 2048`
+- L214: `typedef struct bam1_core_t {`
+- L253: `typedef struct bam1_t {`
+- L267: `#define bam_is_rev(b) (((b)->core.flag&BAM_FREVERSE) != 0)`
+- L273: `#define bam_is_mrev(b) (((b)->core.flag&BAM_FMREVERSE) != 0)`
+- L279: `#define bam_get_qname(b) ((char*)(b)->data)`
+- L289: `#define bam_get_cigar(b) ((uint32_t*)((b)->data + (b)->core.l_qname))`
+- L300: `#define bam_get_seq(b)   ((b)->data + ((b)->core.n_cigar<<2) + (b)->core.l_qname)`
+- L306: `#define bam_get_qual(b)  ((b)->data + ((b)->core.n_cigar<<2) + (b)->core.l_qname + (((b)->core.l_qseq + 1)>>1))`
+- L312: `#define bam_get_aux(b)   ((b)->data + ((b)->core.n_cigar<<2) + (b)->core.l_qname + (((b)->core.l_qseq + 1)>>1) + (b)->core.l_qseq)`
+- L318: `#define bam_get_l_aux(b) ((b)->l_data - ((b)->core.n_cigar<<2) - (b)->core.l_qname - (b)->core.l_qseq - (((b)->core.l_qseq + 1)>>1))`
+- L325: `#define bam_seqi(s, i) ((s)[(i)>>1] >> ((~(i)&1)<<2) & 0xf)`
+- L332: `#define bam_set_seqi(s,i,b) ((s)[(i)>>1] = ((s)[(i)>>1] & (0xf0 >> ((~(i)&1)<<2))) | ((b)<<((~(i)&1)<<2)))`
+- L352: `HTSLIB_EXPORT`
+- L353: `sam_hdr_t *sam_hdr_init(void);`
+- L366: `HTSLIB_EXPORT`
+- L367: `sam_hdr_t *bam_hdr_read(BGZF *fp);`
+- L378: `HTSLIB_EXPORT`
+- L379: `int bam_hdr_write(BGZF *fp, const sam_hdr_t *h) HTS_RESULT_USED;`
+- L384: `HTSLIB_EXPORT`
+- L385: `void sam_hdr_destroy(sam_hdr_t *h);`
+- L394: `HTSLIB_EXPORT`
+- L395: `sam_hdr_t *sam_hdr_dup(const sam_hdr_t *h0);`
+- L400: `static inline sam_hdr_t *bam_hdr_init(void) { return sam_hdr_init(); }`
+- L401: `static inline void bam_hdr_destroy(sam_hdr_t *h) { sam_hdr_destroy(h); }`
+- L402: `static inline sam_hdr_t *bam_hdr_dup(const sam_hdr_t *h0) { return sam_hdr_dup(h0); }`
+- L404: `typedef htsFile samFile;`
+- L417: `HTSLIB_EXPORT`
+- L418: `sam_hdr_t *sam_hdr_parse(size_t l_text, const char *text);`
+- L428: `HTSLIB_EXPORT`
+- L429: `sam_hdr_t *sam_hdr_read(samFile *fp);`
+- L437: `HTSLIB_EXPORT`
+- L438: `int sam_hdr_write(samFile *fp, const sam_hdr_t *h) HTS_RESULT_USED;`
+- L444: `HTSLIB_EXPORT`
+- L445: `size_t sam_hdr_length(sam_hdr_t *h);`
+- L457: `HTSLIB_EXPORT`
+- L458: `const char *sam_hdr_str(sam_hdr_t *h);`
+- L464: `HTSLIB_EXPORT`
+- L465: `int sam_hdr_nref(const sam_hdr_t *h);`
+- L482: `HTSLIB_EXPORT`
+- L483: `int sam_hdr_add_lines(sam_hdr_t *h, const char *lines, size_t len);`
+- L498: `HTSLIB_EXPORT`
+- L499: `int sam_hdr_add_line(sam_hdr_t *h, const char *type, ...);`
+- L517: `HTSLIB_EXPORT`
+- L535: `HTSLIB_EXPORT`
+- L560: `HTSLIB_EXPORT`
+- L561: `int sam_hdr_remove_line_id(sam_hdr_t *h, const char *type, const char *ID_key, const char *ID_value);`
+- L572: `HTSLIB_EXPORT`
+- L573: `int sam_hdr_remove_line_pos(sam_hdr_t *h, const char *type, int position);`
+- L599: `HTSLIB_EXPORT`
+- L616: `HTSLIB_EXPORT`
+- L617: `int sam_hdr_remove_except(sam_hdr_t *h, const char *type, const char *ID_key, const char *ID_value);`
+- L656: `HTSLIB_EXPORT`
+- L657: `int sam_hdr_remove_lines(sam_hdr_t *h, const char *type, const char *id, void *rh);`
+- L665: `HTSLIB_EXPORT`
+- L666: `int sam_hdr_count_lines(sam_hdr_t *h, const char *type);`
+- L675: `HTSLIB_EXPORT`
+- L676: `int sam_hdr_line_index(sam_hdr_t *bh, const char *type, const char *key);`
+- L685: `HTSLIB_EXPORT`
+- L686: `const char *sam_hdr_line_name(sam_hdr_t *bh, const char *type, int pos);`
+- L706: `HTSLIB_EXPORT`
+- L707: `int sam_hdr_find_tag_id(sam_hdr_t *h, const char *type, const char *ID_key, const char *ID_value, const char *key, kstring_t *ks);`
+- L724: `HTSLIB_EXPORT`
+- L725: `int sam_hdr_find_tag_pos(sam_hdr_t *h, const char *type, int pos, const char *key, kstring_t *ks);`
+- L735: `HTSLIB_EXPORT`
+- L736: `int sam_hdr_remove_tag_id(sam_hdr_t *h, const char *type, const char *ID_key, const char *ID_value, const char *key);`
+- L748: `HTSLIB_EXPORT`
+- L749: `int sam_hdr_name2tid(sam_hdr_t *h, const char *ref);`
+- L759: `HTSLIB_EXPORT`
+- L760: `const char *sam_hdr_tid2name(const sam_hdr_t *h, int tid);`
+- L770: `HTSLIB_EXPORT`
+- L771: `hts_pos_t sam_hdr_tid2len(const sam_hdr_t *h, int tid);`
+- L780: `static inline int bam_name2id(sam_hdr_t *h, const char *ref) { return sam_hdr_name2tid(h, ref); }`
+- L791: `HTSLIB_EXPORT`
+- L792: `const char *sam_hdr_pg_id(sam_hdr_t *h, const char *name);`
+- L809: `HTSLIB_EXPORT`
+- L810: `int sam_hdr_add_pg(sam_hdr_t *h, const char *name, ...);`
+- L821: `HTSLIB_EXPORT`
+- L822: `char *stringify_argv(int argc, char *argv[]);`
+- L829: `HTSLIB_EXPORT`
+- L830: `void sam_hdr_incr_ref(sam_hdr_t *h);`
+- L837: `#define sam_hdr_find_hd(h, ks) sam_hdr_find_line_id((h), "HD", NULL, NULL, (ks))`
+- L839: `#define sam_hdr_find_tag_hd(h, key, ks) sam_hdr_find_tag_id((h), "HD", NULL, NULL, (key), (ks))`
+- L841: `#define sam_hdr_update_hd(h, ...) sam_hdr_update_line((h), "HD", NULL, NULL, __VA_ARGS__, NULL)`
+- L843: `#define sam_hdr_remove_tag_hd(h, key) sam_hdr_remove_tag_id((h), "HD", NULL, NULL, (key))`
+- L854: `HTSLIB_EXPORT`
+- L855: `bam1_t *bam_init1(void);`
+- L865: `HTSLIB_EXPORT`
+- L866: `void bam_destroy1(bam1_t *b);`
+- L868: `#define BAM_USER_OWNS_STRUCT 1`
+- L869: `#define BAM_USER_OWNS_DATA   2`
+- L905: `#define MAX_RECS 1000`
+- L906: `#define REC_LENGTH 400  // Average length estimate, to get buffer size`
+- L957: `static inline void bam_set_mempolicy(bam1_t *b, uint32_t policy) {`
+- L966: `static inline uint32_t bam_get_mempolicy(bam1_t *b) {`
+- L981: `HTSLIB_EXPORT`
+- L982: `int bam_read1(BGZF *fp, bam1_t *b) HTS_RESULT_USED;`
+- L994: `HTSLIB_EXPORT`
+- L995: `int bam_write1(BGZF *fp, const bam1_t *b) HTS_RESULT_USED;`
+- L1003: `HTSLIB_EXPORT`
+- L1004: `bam1_t *bam_copy1(bam1_t *bdst, const bam1_t *bsrc) HTS_RESULT_USED;`
+- L1014: `HTSLIB_EXPORT`
+- L1015: `bam1_t *bam_dup1(const bam1_t *bsrc);`
+- L1039: `HTSLIB_EXPORT`
+- L1068: `HTSLIB_EXPORT`
+- L1069: `hts_pos_t bam_cigar2qlen(int n_cigar, const uint32_t *cigar);`
+- L1085: `HTSLIB_EXPORT`
+- L1086: `hts_pos_t bam_cigar2rlen(int n_cigar, const uint32_t *cigar);`
+- L1100: `HTSLIB_EXPORT`
+- L1101: `hts_pos_t bam_endpos(const bam1_t *b);`
+- L1103: `HTSLIB_EXPORT`
+- L1104: `int   bam_str2flag(const char *str);    /** returns negative value on error */`
+- L1106: `HTSLIB_EXPORT`
+- L1107: `char *bam_flag2str(int flag);   /** The string must be freed by the user */`
+- L1114: `HTSLIB_EXPORT`
+- L1115: `int bam_set_qname(bam1_t *b, const char *qname);`
+- L1126: `HTSLIB_EXPORT`
+- L1127: `ssize_t sam_parse_cigar(const char *in, char **end, uint32_t **a_cigar, size_t *a_mem);`
+- L1143: `HTSLIB_EXPORT`
+- L1144: `ssize_t bam_parse_cigar(const char *in, char **end, bam1_t *b);`
+- L1152: `#define bam_itr_destroy(iter) hts_itr_destroy(iter)`
+- L1153: `#define bam_itr_queryi(idx, tid, beg, end) sam_itr_queryi(idx, tid, beg, end)`
+- L1154: `#define bam_itr_querys(idx, hdr, region) sam_itr_querys(idx, hdr, region)`
+- L1155: `#define bam_itr_next(htsfp, itr, r) sam_itr_next((htsfp), (itr), (r))`
+- L1159: `#define bam_index_load(fn) hts_idx_load((fn), HTS_FMT_BAI)`
+- L1160: `#define bam_index_build(fn, min_shift) (sam_index_build((fn), (min_shift)))`
+- L1173: `HTSLIB_EXPORT`
+- L1174: `int sam_idx_init(htsFile *fp, sam_hdr_t *h, int min_shift, const char *fnidx);`
+- L1180: `HTSLIB_EXPORT`
+- L1181: `int sam_idx_save(htsFile *fp) HTS_RESULT_USED;`
+- L1188: `Equivalent to sam_index_load3(fp, fn, NULL, HTS_IDX_SAVE_REMOTE);`
+- L1190: `HTSLIB_EXPORT`
+- L1191: `hts_idx_t *sam_index_load(htsFile *fp, const char *fn);`
+- L1199: `Equivalent to sam_index_load3(fp, fn, fnidx, HTS_IDX_SAVE_REMOTE);`
+- L1201: `HTSLIB_EXPORT`
+- L1202: `hts_idx_t *sam_index_load2(htsFile *fp, const char *fn, const char *fnidx);`
+- L1222: `HTSLIB_EXPORT`
+- L1223: `hts_idx_t *sam_index_load3(htsFile *fp, const char *fn, const char *fnidx, int flags);`
+- L1232: `HTSLIB_EXPORT`
+- L1233: `int sam_index_build(const char *fn, int min_shift) HTS_RESULT_USED;`
+- L1242: `HTSLIB_EXPORT`
+- L1243: `int sam_index_build2(const char *fn, const char *fnidx, int min_shift) HTS_RESULT_USED;`
+- L1253: `HTSLIB_EXPORT`
+- L1254: `int sam_index_build3(const char *fn, const char *fnidx, int min_shift, int nthreads) HTS_RESULT_USED;`
+- L1258: `#define sam_itr_destroy(iter) hts_itr_destroy(iter)`
+- L1277: `HTSLIB_EXPORT`
+- L1278: `hts_itr_t *sam_itr_queryi(const hts_idx_t *idx, int tid, hts_pos_t beg, hts_pos_t end);`
+- L1302: `HTSLIB_EXPORT`
+- L1303: `hts_itr_t *sam_itr_querys(const hts_idx_t *idx, sam_hdr_t *hdr, const char *region);`
+- L1319: `HTSLIB_EXPORT`
+- L1320: `hts_itr_t *sam_itr_regions(const hts_idx_t *idx, sam_hdr_t *hdr, hts_reglist_t *reglist, unsigned int regcount);`
+- L1346: `HTSLIB_EXPORT`
+- L1347: `hts_itr_t *sam_itr_regarray(const hts_idx_t *idx, sam_hdr_t *hdr, char **regarray, unsigned int regcount);`
+- L1355: `static inline int sam_itr_next(htsFile *htsfp, hts_itr_t *itr, bam1_t *r) {`
+- L1377: `#define sam_itr_multi_next(htsfp, itr, r) sam_itr_next(htsfp, itr, r)`
+- L1379: `HTSLIB_EXPORT`
+- L1387: `#define sam_open(fn, mode) (hts_open((fn), (mode)))`
+- L1388: `#define sam_open_format(fn, mode, fmt) (hts_open_format((fn), (mode), (fmt)))`
+- L1389: `#define sam_flush(fp) hts_flush((fp))`
+- L1390: `#define sam_close(fp) hts_close(fp)`
+- L1392: `HTSLIB_EXPORT`
+- L1393: `int sam_open_mode(char *mode, const char *fn, const char *format);`
+- L1398: `HTSLIB_EXPORT`
+- L1403: `HTSLIB_EXPORT`
+- L1404: `int sam_hdr_change_HD(sam_hdr_t *h, const char *key, const char *val);`
+- L1406: `HTSLIB_EXPORT`
+- L1407: `int sam_parse1(kstring_t *s, sam_hdr_t *h, bam1_t *b) HTS_RESULT_USED;`
+- L1408: `HTSLIB_EXPORT`
+- L1409: `int sam_format1(const sam_hdr_t *h, const bam1_t *b, kstring_t *str) HTS_RESULT_USED;`
+- L1417: `HTSLIB_EXPORT`
+- L1418: `int sam_read1(samFile *fp, sam_hdr_t *h, bam1_t *b) HTS_RESULT_USED;`
+- L1425: `HTSLIB_EXPORT`
+- L1426: `int sam_write1(samFile *fp, const sam_hdr_t *h, const bam1_t *b) HTS_RESULT_USED;`
+- L1429: `struct hts_filter_t;`
+- L1437: `HTSLIB_EXPORT`
+- L1439: `struct hts_filter_t *filt);`
+- L1463: `static inline const uint8_t *sam_format_aux1(const uint8_t *key,`
+- L1645: `HTSLIB_EXPORT`
+- L1646: `uint8_t *bam_aux_first(const bam1_t *b);`
+- L1657: `HTSLIB_EXPORT`
+- L1658: `uint8_t *bam_aux_next(const bam1_t *b, const uint8_t *s);`
+- L1669: `HTSLIB_EXPORT`
+- L1670: `uint8_t *bam_aux_get(const bam1_t *b, const char tag[2]);`
+- L1677: `const char *bam_aux_tag(const uint8_t *s) { return (const char *) (s-2); }`
+- L1683: `static inline char bam_aux_type(const uint8_t *s) { return *s; }`
+- L1694: `static inline int bam_aux_get_str(const bam1_t *b,`
+- L1713: `HTSLIB_EXPORT`
+- L1714: `int64_t bam_aux2i(const uint8_t *s);`
+- L1722: `HTSLIB_EXPORT`
+- L1723: `double bam_aux2f(const uint8_t *s);`
+- L1730: `HTSLIB_EXPORT`
+- L1731: `char bam_aux2A(const uint8_t *s);`
+- L1738: `HTSLIB_EXPORT`
+- L1739: `char *bam_aux2Z(const uint8_t *s);`
+- L1746: `HTSLIB_EXPORT`
+- L1747: `uint32_t bam_auxB_len(const uint8_t *s);`
+- L1757: `HTSLIB_EXPORT`
+- L1758: `int64_t bam_auxB2i(const uint8_t *s, uint32_t idx);`
+- L1769: `HTSLIB_EXPORT`
+- L1770: `double bam_auxB2f(const uint8_t *s, uint32_t idx);`
+- L1783: `HTSLIB_EXPORT`
+- L1784: `int bam_aux_append(bam1_t *b, const char tag[2], char type, int len, const uint8_t *data);`
+- L1795: `HTSLIB_EXPORT`
+- L1796: `int bam_aux_del(bam1_t *b, uint8_t *s);`
+- L1811: `HTSLIB_EXPORT`
+- L1812: `uint8_t *bam_aux_remove(bam1_t *b, uint8_t *s);`
+- L1841: `HTSLIB_EXPORT`
+- L1842: `int bam_aux_update_str(bam1_t *b, const char tag[2], int len, const char *data);`
+- L1865: `HTSLIB_EXPORT`
+- L1866: `int bam_aux_update_int(bam1_t *b, const char tag[2], int64_t val);`
+- L1885: `HTSLIB_EXPORT`
+- L1886: `int bam_aux_update_float(bam1_t *b, const char tag[2], float val);`
+- L1924: `HTSLIB_EXPORT`
+- L1943: `typedef union {`
+- L1968: `typedef struct bam_pileup1_t {`
+- L1977: `typedef int (*bam_plp_auto_f)(void *data, bam1_t *b);`
+- L1979: `struct bam_plp_s;`
+- L1980: `typedef struct bam_plp_s *bam_plp_t;`
+- L1982: `struct bam_mplp_s;`
+- L1983: `typedef struct bam_mplp_s *bam_mplp_t;`
+- L1994: `HTSLIB_EXPORT`
+- L1995: `bam_plp_t bam_plp_init(bam_plp_auto_f func, void *data);`
+- L1997: `HTSLIB_EXPORT`
+- L1998: `void bam_plp_destroy(bam_plp_t iter);`
+- L2000: `HTSLIB_EXPORT`
+- L2001: `int bam_plp_push(bam_plp_t iter, const bam1_t *b);`
+- L2003: `HTSLIB_EXPORT`
+- L2004: `const bam_pileup1_t *bam_plp_next(bam_plp_t iter, int *_tid, int *_pos, int *_n_plp);`
+- L2006: `HTSLIB_EXPORT`
+- L2007: `const bam_pileup1_t *bam_plp_auto(bam_plp_t iter, int *_tid, int *_pos, int *_n_plp);`
+- L2009: `HTSLIB_EXPORT`
+- L2010: `const bam_pileup1_t *bam_plp64_next(bam_plp_t iter, int *_tid, hts_pos_t *_pos, int *_n_plp);`
+- L2012: `HTSLIB_EXPORT`
+- L2013: `const bam_pileup1_t *bam_plp64_auto(bam_plp_t iter, int *_tid, hts_pos_t *_pos, int *_n_plp);`
+- L2015: `HTSLIB_EXPORT`
+- L2016: `void bam_plp_set_maxcnt(bam_plp_t iter, int maxcnt);`
+- L2018: `HTSLIB_EXPORT`
+- L2019: `void bam_plp_reset(bam_plp_t iter);`
+- L2032: `HTSLIB_EXPORT`
+- L2035: `HTSLIB_EXPORT`
+- L2052: `HTSLIB_EXPORT`
+- L2053: `int bam_plp_insertion(const bam_pileup1_t *p, kstring_t *ins, int *del_len) HTS_RESULT_USED;`
+- L2060: `typedef struct hts_base_mod_state hts_base_mod_state;`
+- L2081: `HTSLIB_EXPORT`
+- L2089: `HTSLIB_EXPORT`
+- L2090: `bam_mplp_t bam_mplp_init(int n, bam_plp_auto_f func, void **data);`
+- L2104: `HTSLIB_EXPORT`
+- L2105: `int bam_mplp_init_overlaps(bam_mplp_t iter);`
+- L2107: `HTSLIB_EXPORT`
+- L2108: `void bam_mplp_destroy(bam_mplp_t iter);`
+- L2110: `HTSLIB_EXPORT`
+- L2111: `void bam_mplp_set_maxcnt(bam_mplp_t iter, int maxcnt);`
+- L2113: `HTSLIB_EXPORT`
+- L2114: `int bam_mplp_auto(bam_mplp_t iter, int *_tid, int *_pos, int *n_plp, const bam_pileup1_t **plp);`
+- L2116: `HTSLIB_EXPORT`
+- L2117: `int bam_mplp64_auto(bam_mplp_t iter, int *_tid, hts_pos_t *_pos, int *n_plp, const bam_pileup1_t **plp);`
+- L2119: `HTSLIB_EXPORT`
+- L2120: `void bam_mplp_reset(bam_mplp_t iter);`
+- L2122: `HTSLIB_EXPORT`
+- L2126: `HTSLIB_EXPORT`
+- L2137: `HTSLIB_EXPORT`
+- L2138: `int sam_cap_mapq(bam1_t *b, const char *ref, hts_pos_t ref_len, int thres);`
+- L2141: `enum htsRealnFlags {`
+- L2207: `HTSLIB_EXPORT`
+- L2208: `int sam_prob_realn(bam1_t *b, const char *ref, hts_pos_t ref_len, int flag);`
+- L2226: `typedef struct hts_base_mod {`
+- L2233: `#define HTS_MOD_UNKNOWN   -1  // In MM but not ML`
+- L2234: `#define HTS_MOD_UNCHECKED -2  // Not in MM and in explicit mode`
+- L2237: `#define HTS_MOD_REPORT_UNCHECKED 1`
+- L2250: `HTSLIB_EXPORT`
+- L2251: `hts_base_mod_state *hts_base_mod_state_alloc(void);`
+- L2259: `HTSLIB_EXPORT`
+- L2260: `void hts_base_mod_state_free(hts_base_mod_state *state);`
+- L2273: `HTSLIB_EXPORT`
+- L2274: `int bam_parse_basemod(const bam1_t *b, hts_base_mod_state *state);`
+- L2289: `HTSLIB_EXPORT`
+- L2310: `HTSLIB_EXPORT`
+- L2332: `HTSLIB_EXPORT`
+- L2355: `HTSLIB_EXPORT`
+- L2378: `HTSLIB_EXPORT`
+- L2398: `HTSLIB_EXPORT`
+- L2415: `HTSLIB_EXPORT`
+- L2416: `int *bam_mods_recorded(hts_base_mod_state *state, int *ntype);`
+- L2428: `HTSLIB_EXPORT`
+- L2429: `int sam_hdr_set(samFile *fp, sam_hdr_t *h, int dup);`
+- L2438: `HTSLIB_EXPORT`
+- L2439: `sam_hdr_t* sam_hdr_get(samFile* fp);`
+
+## `synced_bcf_reader.h`
+
+- L57: `#define HTSLIB_SYNCED_BCF_READER_H`
+- L78: `#define COLLAPSE_NONE   0   // require the exact same set of alleles in all files`
+- L79: `#define COLLAPSE_SNPS   1   // allow different alleles, as long as they all are SNPs`
+- L80: `#define COLLAPSE_INDELS 2   // the same as above, but with indels`
+- L81: `#define COLLAPSE_ANY    4   // any combination of alleles can be returned by bcf_sr_next_line()`
+- L82: `#define COLLAPSE_SOME   8   // at least some of the ALTs must match`
+- L83: `#define COLLAPSE_BOTH  (COLLAPSE_SNPS|COLLAPSE_INDELS)`
+- L85: `#define BCF_SR_PAIR_SNPS       (1<<0)  // allow different alleles, as long as they all are SNPs`
+- L86: `#define BCF_SR_PAIR_INDELS     (1<<1)  // the same as above, but with indels`
+- L87: `#define BCF_SR_PAIR_ANY        (1<<2)  // any combination of alleles can be returned by bcf_sr_next_line()`
+- L88: `#define BCF_SR_PAIR_SOME       (1<<3)  // at least some of multiallelic ALTs must match. Implied by all the others with the exception of EXACT`
+- L89: `#define BCF_SR_PAIR_SNP_REF    (1<<4)  // allow REF-only records with SNPs`
+- L90: `#define BCF_SR_PAIR_INDEL_REF  (1<<5)  // allow REF-only records with indels`
+- L91: `#define BCF_SR_PAIR_EXACT      (1<<6)  // require the exact same set of alleles in all files`
+- L92: `#define BCF_SR_PAIR_ID         (1<<7)  // require matching IDs (overlap)`
+- L93: `#define BCF_SR_PAIR_BOTH       (BCF_SR_PAIR_SNPS|BCF_SR_PAIR_INDELS)`
+- L94: `#define BCF_SR_PAIR_BOTH_REF   (BCF_SR_PAIR_SNPS|BCF_SR_PAIR_INDELS|BCF_SR_PAIR_SNP_REF|BCF_SR_PAIR_INDEL_REF)`
+- L96: `typedef enum`
+- L106: `struct bcf_sr_region_t;`
+- L108: `typedef struct bcf_sr_regions_t`
+- L127: `struct bcf_sr_region_t *regs; // the regions`
+- L141: `typedef struct bcf_sr_t`
+- L156: `typedef enum`
+- L163: `typedef struct bcf_srs_t`
+- L200: `HTSLIB_EXPORT`
+- L201: `bcf_srs_t *bcf_sr_init(void);`
+- L204: `HTSLIB_EXPORT`
+- L205: `void bcf_sr_destroy(bcf_srs_t *readers);`
+- L207: `HTSLIB_EXPORT`
+- L208: `char *bcf_sr_strerror(int errnum);`
+- L210: `HTSLIB_EXPORT`
+- L211: `int bcf_sr_set_opt(bcf_srs_t *readers, bcf_sr_opt_t opt, ...);`
+- L220: `HTSLIB_EXPORT`
+- L221: `int bcf_sr_set_threads(bcf_srs_t *files, int n_threads);`
+- L224: `HTSLIB_EXPORT`
+- L225: `void bcf_sr_destroy_threads(bcf_srs_t *files);`
+- L238: `HTSLIB_EXPORT`
+- L239: `int bcf_sr_add_reader(bcf_srs_t *readers, const char *fname);`
+- L256: `HTSLIB_EXPORT`
+- L260: `HTSLIB_EXPORT`
+- L261: `void bcf_sr_remove_reader(bcf_srs_t *files, int i);`
+- L271: `HTSLIB_EXPORT`
+- L272: `int bcf_sr_next_line(bcf_srs_t *readers);`
+- L274: `#define bcf_sr_has_line(readers, i) (readers)->has_line[i]`
+- L275: `#define bcf_sr_get_line(_readers, i) ((_readers)->has_line[i] ? ((_readers)->readers[i].buffer[0]) : (bcf1_t *) NULL)`
+- L276: `#define bcf_sr_swap_line(_readers, i, lieu) { bcf1_t *tmp = lieu; lieu = (_readers)->readers[i].buffer[0]; (_readers)->readers[i].buffer[0] = tmp; }`
+- L277: `#define bcf_sr_region_done(_readers,i) (!(_readers)->has_line[i] && !(_readers)->readers[i].nbuffer ? 1 : 0)`
+- L278: `#define bcf_sr_get_header(_readers, i) (_readers)->readers[i].header`
+- L279: `#define bcf_sr_get_reader(_readers, i) &((_readers)->readers[i])`
+- L287: `HTSLIB_EXPORT`
+- L288: `int bcf_sr_seek(bcf_srs_t *readers, const char *seq, hts_pos_t pos);`
+- L301: `HTSLIB_EXPORT`
+- L302: `int bcf_sr_set_samples(bcf_srs_t *readers, const char *samples, int is_file);`
+- L335: `HTSLIB_EXPORT`
+- L336: `int bcf_sr_set_targets(bcf_srs_t *readers, const char *targets, int is_file, int alleles);`
+- L338: `HTSLIB_EXPORT`
+- L339: `int bcf_sr_set_regions(bcf_srs_t *readers, const char *regions, int is_file);`
+- L368: `HTSLIB_EXPORT`
+- L369: `bcf_sr_regions_t *bcf_sr_regions_init(const char *regions, int is_file, int chr, int from, int to);`
+- L371: `HTSLIB_EXPORT`
+- L372: `void bcf_sr_regions_destroy(bcf_sr_regions_t *regions);`
+- L380: `HTSLIB_EXPORT`
+- L381: `int bcf_sr_regions_seek(bcf_sr_regions_t *regions, const char *chr);`
+- L390: `HTSLIB_EXPORT`
+- L391: `int bcf_sr_regions_next(bcf_sr_regions_t *reg);`
+- L402: `HTSLIB_EXPORT`
+- L403: `int bcf_sr_regions_overlap(bcf_sr_regions_t *reg, const char *seq, hts_pos_t start, hts_pos_t end);`
+- L410: `HTSLIB_EXPORT`
+- L411: `int bcf_sr_regions_flush(bcf_sr_regions_t *regs);`
+
+## `tbx.h`
+
+- L28: `#define HTSLIB_TBX_H`
+- L36: `#define TBX_MAX_SHIFT 31`
+- L38: `#define TBX_GENERIC 0`
+- L39: `#define TBX_SAM     1`
+- L40: `#define TBX_VCF     2`
+- L41: `#define TBX_GAF     3`
+- L42: `#define TBX_UCSC    0x10000`
+- L44: `typedef struct tbx_conf_t {`
+- L50: `typedef struct tbx_t {`
+- L56: `HTSLIB_EXPORT`
+- L59: `#define tbx_itr_destroy(iter) hts_itr_destroy(iter)`
+- L60: `#define tbx_itr_queryi(tbx, tid, beg, end) hts_itr_query((tbx)->idx, (tid), (beg), (end), tbx_readrec)`
+- L61: `#define tbx_itr_querys(tbx, s) tbx_itr_querys1((tbx), (s))`
+- L62: `#define tbx_itr_next(htsfp, tbx, itr, r) hts_itr_next(hts_get_bgzfp(htsfp), (itr), (r), (tbx))`
+- L63: `#define tbx_bgzf_itr_next(bgzfp, tbx, itr, r) hts_itr_next((bgzfp), (itr), (r), (tbx))`
+- L65: `HTSLIB_EXPORT`
+- L66: `hts_itr_t *tbx_itr_querys1(tbx_t *tbx, const char *region);`
+- L68: `HTSLIB_EXPORT`
+- L69: `int tbx_name2id(tbx_t *tbx, const char *ss);`
+- L72: `HTSLIB_EXPORT`
+- L73: `BGZF *hts_get_bgzfp(htsFile *fp);`
+- L75: `HTSLIB_EXPORT`
+- L76: `int tbx_readrec(BGZF *fp, void *tbxv, void *sv, int *tid, hts_pos_t *beg, hts_pos_t *end);`
+- L82: `HTSLIB_EXPORT`
+- L83: `tbx_t *tbx_index(BGZF *fp, int min_shift, const tbx_conf_t *conf);`
+- L87: `HTSLIB_EXPORT`
+- L88: `int tbx_index_build(const char *fn, int min_shift, const tbx_conf_t *conf);`
+- L90: `HTSLIB_EXPORT`
+- L91: `int tbx_index_build2(const char *fn, const char *fnidx, int min_shift, const tbx_conf_t *conf);`
+- L93: `HTSLIB_EXPORT`
+- L94: `int tbx_index_build3(const char *fn, const char *fnidx, int min_shift, int n_threads, const tbx_conf_t *conf);`
+- L100: `Equivalent to tbx_index_load3(fn, NULL, HTS_IDX_SAVE_REMOTE);`
+- L102: `HTSLIB_EXPORT`
+- L103: `tbx_t *tbx_index_load(const char *fn);`
+- L112: `Equivalent to tbx_index_load3(fn, fnidx, HTS_IDX_SAVE_REMOTE);`
+- L114: `HTSLIB_EXPORT`
+- L115: `tbx_t *tbx_index_load2(const char *fn, const char *fnidx);`
+- L134: `HTSLIB_EXPORT`
+- L135: `tbx_t *tbx_index_load3(const char *fn, const char *fnidx, int flags);`
+- L137: `HTSLIB_EXPORT`
+- L138: `const char **tbx_seqnames(tbx_t *tbx, int *n);  // free the array but not the values`
+- L140: `HTSLIB_EXPORT`
+- L141: `void tbx_destroy(tbx_t *tbx);`
+
+## `thread_pool.h`
+
+- L48: `#define HTSLIB_THREAD_POOL_H`
+- L76: `typedef struct hts_tpool_process hts_tpool_process;`
+- L85: `typedef struct hts_tpool hts_tpool;`
+- L90: `typedef struct hts_tpool_result hts_tpool_result;`
+- L107: `HTSLIB_EXPORT`
+- L108: `hts_tpool *hts_tpool_init(int n);`
+- L114: `HTSLIB_EXPORT`
+- L115: `int hts_tpool_size(hts_tpool *p);`
+- L123: `HTSLIB_EXPORT`
+- L124: `int hts_tpool_worker_id(hts_tpool *pool);`
+- L136: `HTSLIB_EXPORT`
+- L158: `HTSLIB_EXPORT`
+- L201: `HTSLIB_EXPORT`
+- L212: `HTSLIB_EXPORT`
+- L213: `void hts_tpool_wake_dispatch(hts_tpool_process *q);`
+- L226: `HTSLIB_EXPORT`
+- L227: `int hts_tpool_process_flush(hts_tpool_process *q);`
+- L241: `HTSLIB_EXPORT`
+- L242: `int hts_tpool_process_reset(hts_tpool_process *q, int free_results);`
+- L245: `HTSLIB_EXPORT`
+- L246: `int hts_tpool_process_qsize(hts_tpool_process *q);`
+- L253: `HTSLIB_EXPORT`
+- L254: `void hts_tpool_destroy(hts_tpool *p);`
+- L260: `HTSLIB_EXPORT`
+- L261: `void hts_tpool_kill(hts_tpool *p);`
+- L273: `HTSLIB_EXPORT`
+- L274: `hts_tpool_result *hts_tpool_next_result(hts_tpool_process *q);`
+- L286: `HTSLIB_EXPORT`
+- L287: `hts_tpool_result *hts_tpool_next_result_wait(hts_tpool_process *q);`
+- L293: `HTSLIB_EXPORT`
+- L294: `void hts_tpool_delete_result(hts_tpool_result *r, int free_data);`
+- L300: `HTSLIB_EXPORT`
+- L301: `void *hts_tpool_result_data(hts_tpool_result *r);`
+- L316: `HTSLIB_EXPORT`
+- L317: `hts_tpool_process *hts_tpool_process_init(hts_tpool *p, int qsize, int in_only);`
+- L323: `HTSLIB_EXPORT`
+- L324: `void hts_tpool_process_destroy(hts_tpool_process *q);`
+- L330: `HTSLIB_EXPORT`
+- L331: `int hts_tpool_process_empty(hts_tpool_process *q);`
+- L336: `HTSLIB_EXPORT`
+- L337: `int hts_tpool_process_len(hts_tpool_process *q);`
+- L343: `HTSLIB_EXPORT`
+- L344: `int hts_tpool_process_sz(hts_tpool_process *q);`
+- L352: `HTSLIB_EXPORT`
+- L353: `void hts_tpool_process_shutdown(hts_tpool_process *q);`
+- L360: `HTSLIB_EXPORT`
+- L361: `int hts_tpool_process_is_shutdown(hts_tpool_process *q);`
+- L371: `HTSLIB_EXPORT`
+- L372: `void hts_tpool_process_attach(hts_tpool *p, hts_tpool_process *q);`
+- L374: `HTSLIB_EXPORT`
+- L375: `void hts_tpool_process_detach(hts_tpool *p, hts_tpool_process *q);`
+- L383: `HTSLIB_EXPORT`
+- L384: `void hts_tpool_process_ref_incr(hts_tpool_process *q);`
+- L386: `HTSLIB_EXPORT`
+- L387: `void hts_tpool_process_ref_decr(hts_tpool_process *q);`
+
+## `vcf.h`
+
+- L34: `#define HTSLIB_VCF_H`
+- L55: `#define BCF_HL_FLT  0 // header line`
+- L56: `#define BCF_HL_INFO 1`
+- L57: `#define BCF_HL_FMT  2`
+- L58: `#define BCF_HL_CTG  3`
+- L59: `#define BCF_HL_STR  4 // structured header line TAG=<A=..,B=..>`
+- L60: `#define BCF_HL_GEN  5 // generic header line`
+- L62: `#define BCF_HT_FLAG 0 // header type`
+- L63: `#define BCF_HT_INT  1`
+- L64: `#define BCF_HT_REAL 2`
+- L65: `#define BCF_HT_STR  3`
+- L66: `#define BCF_HT_LONG (BCF_HT_INT | 0x100) // BCF_HT_INT, but for int64_t values; VCF only!`
+- L69: `#define BCF_VL_FIXED 0 ///< Integer defining a fixed number of items`
+- L70: `#define BCF_VL_VAR   1 ///< Generic variable length ("Number=.")`
+- L71: `#define BCF_VL_A     2 ///< One value per alternate allele`
+- L72: `#define BCF_VL_G     3 ///< One value for each possible genotype`
+- L73: `#define BCF_VL_R     4 ///< One value for each allele, including the reference`
+- L76: `#define BCF_VL_P     5 ///< One value for each allele value defined in GT`
+- L79: `#define BCF_VL_LA    6 ///< As BCF_VL_A, but only alt alleles listed in LAA are considered present`
+- L80: `#define BCF_VL_LG    7 ///< As BCF_VL_G, but only alt alleles listed in LAA are considered present`
+- L81: `#define BCF_VL_LR    8 ///< As BCF_VL_R, but only alt alleles listed in LAA are considered present`
+- L82: `#define BCF_VL_M     9 ///< One value for each possible base modification for the corresponding ChEBI ID`
+- L96: `#define BCF_DT_ID       0 // dictionary type`
+- L97: `#define BCF_DT_CTG      1`
+- L98: `#define BCF_DT_SAMPLE   2`
+- L101: `typedef struct bcf_hrec_t {`
+- L109: `typedef struct bcf_idinfo_t {`
+- L116: `typedef struct bcf_idpair_t {`
+- L122: `typedef struct bcf_hdr_t {`
+- L136: `HTSLIB_EXPORT`
+- L143: `#define BCF_BT_NULL     0`
+- L144: `#define BCF_BT_INT8     1`
+- L145: `#define BCF_BT_INT16    2`
+- L146: `#define BCF_BT_INT32    3`
+- L147: `#define BCF_BT_INT64    4  // Unofficial, for internal use only.`
+- L148: `#define BCF_BT_FLOAT    5`
+- L149: `#define BCF_BT_CHAR     7`
+- L151: `#define VCF_REF         0`
+- L152: `#define VCF_SNP     (1<<0)`
+- L153: `#define VCF_MNP     (1<<1)`
+- L154: `#define VCF_INDEL   (1<<2)`
+- L155: `#define VCF_OTHER   (1<<3)`
+- L156: `#define VCF_BND     (1<<4)      // breakend`
+- L157: `#define VCF_OVERLAP (1<<5)      // overlapping deletion, ALT=*`
+- L158: `#define VCF_INS     (1<<6)      // implies VCF_INDEL`
+- L159: `#define VCF_DEL     (1<<7)      // implies VCF_INDEL`
+- L160: `#define VCF_ANY     (VCF_SNP|VCF_MNP|VCF_INDEL|VCF_OTHER|VCF_BND|VCF_OVERLAP|VCF_INS|VCF_DEL)       // any variant type (but not VCF_REF)`
+- L162: `typedef struct bcf_variant_t {`
+- L166: `typedef struct bcf_fmt_t {`
+- L174: `typedef struct bcf_info_t {`
+- L190: `#define BCF1_DIRTY_ID  1`
+- L191: `#define BCF1_DIRTY_ALS 2`
+- L192: `#define BCF1_DIRTY_FLT 4`
+- L193: `#define BCF1_DIRTY_INF 8`
+- L195: `typedef struct bcf_dec_t {`
+- L210: `#define BCF_ERR_CTG_UNDEF 1`
+- L211: `#define BCF_ERR_TAG_UNDEF 2`
+- L212: `#define BCF_ERR_NCOLS     4`
+- L213: `#define BCF_ERR_LIMITS    8`
+- L214: `#define BCF_ERR_CHAR     16`
+- L215: `#define BCF_ERR_CTG_INVALID   32`
+- L216: `#define BCF_ERR_TAG_INVALID   64`
+- L231: `HTSLIB_EXPORT`
+- L232: `const char *bcf_strerror(int errorcode, char *buffer, size_t maxbuffer);`
+- L245: `typedef struct bcf1_t {`
+- L277: `#define bcf_init1()         bcf_init()`
+- L278: `#define bcf_read1(fp,h,v)   bcf_read((fp),(h),(v))`
+- L279: `#define vcf_read1(fp,h,v)   vcf_read((fp),(h),(v))`
+- L280: `#define bcf_write1(fp,h,v)  bcf_write((fp),(h),(v))`
+- L281: `#define vcf_write1(fp,h,v)  vcf_write((fp),(h),(v))`
+- L282: `#define bcf_destroy1(v)     bcf_destroy(v)`
+- L283: `#define bcf_empty1(v)       bcf_empty(v)`
+- L284: `#define vcf_parse1(s,h,v)   vcf_parse((s),(h),(v))`
+- L285: `#define bcf_clear1(v)       bcf_clear(v)`
+- L286: `#define vcf_format1(h,v,s)  vcf_format((h),(v),(s))`
+- L298: `HTSLIB_EXPORT`
+- L299: `bcf_hdr_t *bcf_hdr_init(const char *mode);`
+- L302: `HTSLIB_EXPORT`
+- L303: `void bcf_hdr_destroy(bcf_hdr_t *h);`
+- L310: `HTSLIB_EXPORT`
+- L311: `bcf1_t *bcf_init(void);`
+- L314: `HTSLIB_EXPORT`
+- L315: `void bcf_destroy(bcf1_t *v);`
+- L321: `HTSLIB_EXPORT`
+- L322: `void bcf_empty(bcf1_t *v);`
+- L329: `HTSLIB_EXPORT`
+- L330: `void bcf_clear(bcf1_t *v);`
+- L334: `typedef htsFile vcfFile;`
+- L335: `#define bcf_open(fn, mode) hts_open((fn), (mode))`
+- L336: `#define vcf_open(fn, mode) hts_open((fn), (mode))`
+- L337: `#define bcf_flush(fp) hts_flush((fp))`
+- L338: `#define bcf_close(fp) hts_close(fp)`
+- L339: `#define vcf_close(fp) hts_close(fp)`
+- L349: `HTSLIB_EXPORT`
+- L350: `bcf_hdr_t *bcf_hdr_read(htsFile *fp) HTS_RESULT_USED;`
+- L374: `HTSLIB_EXPORT`
+- L375: `int bcf_hdr_set_samples(bcf_hdr_t *hdr, const char *samples, int is_file) HTS_RESULT_USED;`
+- L377: `HTSLIB_EXPORT`
+- L378: `int bcf_subset_format(const bcf_hdr_t *hdr, bcf1_t *rec);`
+- L385: `HTSLIB_EXPORT`
+- L386: `int bcf_hdr_write(htsFile *fp, bcf_hdr_t *h) HTS_RESULT_USED;`
+- L392: `HTSLIB_EXPORT`
+- L393: `int vcf_parse(kstring_t *s, const bcf_hdr_t *h, bcf1_t *v);`
+- L402: `HTSLIB_EXPORT`
+- L403: `int vcf_open_mode(char *mode, const char *fn, const char *format);`
+- L406: `HTSLIB_EXPORT`
+- L407: `int vcf_format(const bcf_hdr_t *h, const bcf1_t *v, kstring_t *s);`
+- L419: `HTSLIB_EXPORT`
+- L420: `int bcf_read(htsFile *fp, const bcf_hdr_t *h, bcf1_t *v) HTS_RESULT_USED;`
+- L429: `#define BCF_UN_STR  1       // up to ALT inclusive`
+- L430: `#define BCF_UN_FLT  2       // up to FILTER`
+- L431: `#define BCF_UN_INFO 4       // up to INFO`
+- L432: `#define BCF_UN_SHR  (BCF_UN_STR|BCF_UN_FLT|BCF_UN_INFO) // all shared information`
+- L433: `#define BCF_UN_FMT  8                           // unpack format and each sample`
+- L434: `#define BCF_UN_IND  BCF_UN_FMT                  // a synonym of BCF_UN_FMT`
+- L435: `#define BCF_UN_ALL  (BCF_UN_SHR|BCF_UN_FMT)     // everything`
+- L436: `HTSLIB_EXPORT`
+- L437: `int bcf_unpack(bcf1_t *b, int which);`
+- L449: `HTSLIB_EXPORT`
+- L450: `bcf1_t *bcf_dup(bcf1_t *src);`
+- L452: `HTSLIB_EXPORT`
+- L453: `bcf1_t *bcf_copy(bcf1_t *dst, bcf1_t *src);`
+- L461: `HTSLIB_EXPORT`
+- L462: `int bcf_write(htsFile *fp, bcf_hdr_t *h, bcf1_t *v) HTS_RESULT_USED;`
+- L479: `HTSLIB_EXPORT`
+- L480: `bcf_hdr_t *vcf_hdr_read(htsFile *fp) HTS_RESULT_USED;`
+- L489: `HTSLIB_EXPORT`
+- L490: `int vcf_hdr_write(htsFile *fp, const bcf_hdr_t *h) HTS_RESULT_USED;`
+- L500: `HTSLIB_EXPORT`
+- L501: `int vcf_read(htsFile *fp, const bcf_hdr_t *h, bcf1_t *v) HTS_RESULT_USED;`
+- L511: `HTSLIB_EXPORT`
+- L512: `int vcf_write(htsFile *fp, const bcf_hdr_t *h, bcf1_t *v) HTS_RESULT_USED;`
+- L515: `HTSLIB_EXPORT`
+- L516: `int bcf_readrec(BGZF *fp, void *null, void *v, int *tid, hts_pos_t *beg, hts_pos_t *end);`
+- L527: `HTSLIB_EXPORT`
+- L528: `int vcf_write_line(htsFile *fp, kstring_t *line);`
+- L540: `HTSLIB_EXPORT`
+- L541: `bcf_hdr_t *bcf_hdr_dup(const bcf_hdr_t *hdr);`
+- L549: `HTSLIB_EXPORT`
+- L550: `int bcf_hdr_combine(bcf_hdr_t *dst, const bcf_hdr_t *src) HTS_DEPRECATED("Please use bcf_hdr_merge instead");`
+- L567: `HTSLIB_EXPORT`
+- L568: `bcf_hdr_t *bcf_hdr_merge(bcf_hdr_t *dst, const bcf_hdr_t *src);`
+- L580: `HTSLIB_EXPORT`
+- L581: `int bcf_hdr_add_sample(bcf_hdr_t *hdr, const char *sample);`
+- L584: `HTSLIB_EXPORT`
+- L585: `int bcf_hdr_set(bcf_hdr_t *hdr, const char *fname);`
+- L592: `HTSLIB_EXPORT`
+- L593: `int bcf_hdr_format(const bcf_hdr_t *hdr, int is_bcf, kstring_t *str);`
+- L600: `HTSLIB_EXPORT`
+- L605: `HTSLIB_EXPORT`
+- L606: `int bcf_hdr_append(bcf_hdr_t *h, const char *line);`
+- L608: `HTSLIB_EXPORT`
+- L613: `HTSLIB_EXPORT`
+- L614: `const char *bcf_hdr_get_version(const bcf_hdr_t *hdr);`
+- L622: `HTSLIB_EXPORT`
+- L623: `int bcf_hdr_set_version(bcf_hdr_t *hdr, const char *version);`
+- L630: `HTSLIB_EXPORT`
+- L631: `void bcf_hdr_remove(bcf_hdr_t *h, int type, const char *key);`
+- L647: `HTSLIB_EXPORT`
+- L648: `bcf_hdr_t *bcf_hdr_subset(const bcf_hdr_t *h0, int n, char *const* samples, int *imap);`
+- L655: `HTSLIB_EXPORT`
+- L656: `const char **bcf_hdr_seqnames(const bcf_hdr_t *h, int *nseqs);`
+- L659: `#define bcf_hdr_nsamples(hdr) (hdr)->n[BCF_DT_SAMPLE]`
+- L663: `HTSLIB_EXPORT`
+- L664: `int bcf_hdr_parse(bcf_hdr_t *hdr, char *htxt);`
+- L674: `HTSLIB_EXPORT`
+- L675: `int bcf_hdr_sync(bcf_hdr_t *h) HTS_RESULT_USED;`
+- L694: `HTSLIB_EXPORT`
+- L695: `bcf_hrec_t *bcf_hdr_parse_line(const bcf_hdr_t *h, const char *line, int *len);`
+- L702: `HTSLIB_EXPORT`
+- L703: `int bcf_hrec_format(const bcf_hrec_t *hrec, kstring_t *str);`
+- L721: `HTSLIB_EXPORT`
+- L722: `int bcf_hdr_add_hrec(bcf_hdr_t *hdr, bcf_hrec_t *hrec);`
+- L732: `HTSLIB_EXPORT`
+- L733: `bcf_hrec_t *bcf_hdr_get_hrec(const bcf_hdr_t *hdr, int type, const char *key, const char *value, const char *str_class);`
+- L742: `HTSLIB_EXPORT`
+- L743: `bcf_hrec_t *bcf_hrec_dup(bcf_hrec_t *hrec);`
+- L751: `HTSLIB_EXPORT`
+- L752: `int bcf_hrec_add_key(bcf_hrec_t *hrec, const char *str, size_t len) HTS_RESULT_USED;`
+- L762: `HTSLIB_EXPORT`
+- L763: `int bcf_hrec_set_val(bcf_hrec_t *hrec, int i, const char *str, size_t len, int is_quoted) HTS_RESULT_USED;`
+- L765: `HTSLIB_EXPORT`
+- L766: `int bcf_hrec_find_key(bcf_hrec_t *hrec, const char *key);`
+- L774: `HTSLIB_EXPORT`
+- L775: `int hrec_add_idx(bcf_hrec_t *hrec, int idx) HTS_RESULT_USED;`
+- L780: `HTSLIB_EXPORT`
+- L781: `void bcf_hrec_destroy(bcf_hrec_t *hrec);`
+- L790: `HTSLIB_EXPORT`
+- L791: `int bcf_subset(const bcf_hdr_t *h, bcf1_t *v, int n, int *imap);`
+- L800: `HTSLIB_EXPORT`
+- L801: `int bcf_translate(const bcf_hdr_t *dst_hdr, bcf_hdr_t *src_hdr, bcf1_t *src_line);`
+- L813: `HTSLIB_EXPORT`
+- L814: `int bcf_get_variant_types(bcf1_t *rec);`
+- L826: `HTSLIB_EXPORT`
+- L827: `int bcf_get_variant_type(bcf1_t *rec, int ith_allele);`
+- L830: `enum bcf_variant_match {`
+- L860: `HTSLIB_EXPORT`
+- L861: `int bcf_has_variant_types(bcf1_t *rec, uint32_t bitmask, enum bcf_variant_match mode);`
+- L886: `HTSLIB_EXPORT`
+- L887: `int bcf_has_variant_type(bcf1_t *rec, int ith_allele, uint32_t bitmask);`
+- L896: `HTSLIB_EXPORT`
+- L897: `int bcf_variant_length(bcf1_t *rec, int ith_allele);`
+- L899: `HTSLIB_EXPORT`
+- L900: `int bcf_is_snp(bcf1_t *v);`
+- L907: `HTSLIB_EXPORT`
+- L908: `int bcf_update_filter(const bcf_hdr_t *hdr, bcf1_t *line, int *flt_ids, int n);`
+- L915: `HTSLIB_EXPORT`
+- L916: `int bcf_add_filter(const bcf_hdr_t *hdr, bcf1_t *line, int flt_id);`
+- L922: `HTSLIB_EXPORT`
+- L923: `int bcf_remove_filter(const bcf_hdr_t *hdr, bcf1_t *line, int flt_id, int pass);`
+- L927: `HTSLIB_EXPORT`
+- L928: `int bcf_has_filter(const bcf_hdr_t *hdr, bcf1_t *line, char *filter);`
+- L935: `HTSLIB_EXPORT`
+- L936: `int bcf_update_alleles(const bcf_hdr_t *hdr, bcf1_t *line, const char **alleles, int nals);`
+- L938: `HTSLIB_EXPORT`
+- L939: `int bcf_update_alleles_str(const bcf_hdr_t *hdr, bcf1_t *line, const char *alleles_string);`
+- L945: `HTSLIB_EXPORT`
+- L946: `int bcf_update_id(const bcf_hdr_t *hdr, bcf1_t *line, const char *id);`
+- L948: `HTSLIB_EXPORT`
+- L949: `int bcf_add_id(const bcf_hdr_t *hdr, bcf1_t *line, const char *id);`
+- L971: `#define bcf_update_info_int32(hdr,line,key,values,n)   bcf_update_info((hdr),(line),(key),(values),(n),BCF_HT_INT)`
+- L972: `#define bcf_update_info_float(hdr,line,key,values,n)   bcf_update_info((hdr),(line),(key),(values),(n),BCF_HT_REAL)`
+- L973: `#define bcf_update_info_flag(hdr,line,key,string,n)    bcf_update_info((hdr),(line),(key),(string),(n),BCF_HT_FLAG)`
+- L974: `#define bcf_update_info_string(hdr,line,key,string)    bcf_update_info((hdr),(line),(key),(string),1,BCF_HT_STR)`
+- L975: `HTSLIB_EXPORT`
+- L976: `int bcf_update_info(const bcf_hdr_t *hdr, bcf1_t *line, const char *key, const void *values, int n, int type);`
+- L994: `static inline int bcf_update_info_int64(const bcf_hdr_t *hdr, bcf1_t *line,`
+- L1019: `#define bcf_update_format_int32(hdr,line,key,values,n) bcf_update_format((hdr),(line),(key),(values),(n),BCF_HT_INT)`
+- L1020: `#define bcf_update_format_float(hdr,line,key,values,n) bcf_update_format((hdr),(line),(key),(values),(n),BCF_HT_REAL)`
+- L1021: `#define bcf_update_format_char(hdr,line,key,values,n) bcf_update_format((hdr),(line),(key),(values),(n),BCF_HT_STR)`
+- L1022: `#define bcf_update_genotypes(hdr,line,gts,n) bcf_update_format((hdr),(line),"GT",(gts),(n),BCF_HT_INT)     // See bcf_gt_ macros below`
+- L1024: `HTSLIB_EXPORT`
+- L1025: `int bcf_update_format_string(const bcf_hdr_t *hdr, bcf1_t *line, const char *key, const char **values, int n);`
+- L1027: `HTSLIB_EXPORT`
+- L1028: `int bcf_update_format(const bcf_hdr_t *hdr, bcf1_t *line, const char *key, const void *values, int n, int type);`
+- L1033: `#define bcf_gt_phased(idx)      (((idx)+1)<<1|1)`
+- L1034: `#define bcf_gt_unphased(idx)    (((idx)+1)<<1)`
+- L1035: `#define bcf_gt_missing          0`
+- L1036: `#define bcf_gt_is_missing(val)  ((val)>>1 ? 0 : 1)`
+- L1037: `#define bcf_gt_is_phased(val)   ((val)&1)`
+- L1038: `#define bcf_gt_allele(val)      (((val)>>1)-1)`
+- L1041: `#define bcf_alleles2gt(a,b) ((a)>(b)?((a)*((a)+1)/2+(b)):((b)*((b)+1)/2+(a)))`
+- L1042: `static inline void bcf_gt2alleles(int igt, int *a, int *b)`
+- L1058: `HTSLIB_EXPORT`
+- L1059: `bcf_fmt_t *bcf_get_fmt(const bcf_hdr_t *hdr, bcf1_t *line, const char *key);`
+- L1061: `HTSLIB_EXPORT`
+- L1062: `bcf_info_t *bcf_get_info(const bcf_hdr_t *hdr, bcf1_t *line, const char *key);`
+- L1072: `HTSLIB_EXPORT`
+- L1073: `bcf_fmt_t *bcf_get_fmt_id(bcf1_t *line, const int id);`
+- L1075: `HTSLIB_EXPORT`
+- L1076: `bcf_info_t *bcf_get_info_id(bcf1_t *line, const int id);`
+- L1100: `#define bcf_get_info_int32(hdr,line,tag,dst,ndst)  bcf_get_info_values(hdr,line,tag,(void**)(dst),ndst,BCF_HT_INT)`
+- L1101: `#define bcf_get_info_float(hdr,line,tag,dst,ndst)  bcf_get_info_values(hdr,line,tag,(void**)(dst),ndst,BCF_HT_REAL)`
+- L1102: `#define bcf_get_info_string(hdr,line,tag,dst,ndst) bcf_get_info_values(hdr,line,tag,(void**)(dst),ndst,BCF_HT_STR)`
+- L1103: `#define bcf_get_info_flag(hdr,line,tag,dst,ndst)   bcf_get_info_values(hdr,line,tag,(void**)(dst),ndst,BCF_HT_FLAG)`
+- L1105: `HTSLIB_EXPORT`
+- L1106: `int bcf_get_info_values(const bcf_hdr_t *hdr, bcf1_t *line, const char *tag, void **dst, int *ndst, int type);`
+- L1127: `static inline int bcf_get_info_int64(const bcf_hdr_t *hdr, bcf1_t *line,`
+- L1187: `#define bcf_get_format_int32(hdr,line,tag,dst,ndst)  bcf_get_format_values(hdr,line,tag,(void**)(dst),ndst,BCF_HT_INT)`
+- L1188: `#define bcf_get_format_float(hdr,line,tag,dst,ndst)  bcf_get_format_values(hdr,line,tag,(void**)(dst),ndst,BCF_HT_REAL)`
+- L1189: `#define bcf_get_format_char(hdr,line,tag,dst,ndst)   bcf_get_format_values(hdr,line,tag,(void**)(dst),ndst,BCF_HT_STR)`
+- L1190: `#define bcf_get_genotypes(hdr,line,dst,ndst)         bcf_get_format_values(hdr,line,"GT",(void**)(dst),ndst,BCF_HT_INT)`
+- L1192: `HTSLIB_EXPORT`
+- L1193: `int bcf_get_format_string(const bcf_hdr_t *hdr, bcf1_t *line, const char *tag, char ***dst, int *ndst);`
+- L1195: `HTSLIB_EXPORT`
+- L1196: `int bcf_get_format_values(const bcf_hdr_t *hdr, bcf1_t *line, const char *tag, void **dst, int *ndst, int type);`
+- L1213: `HTSLIB_EXPORT`
+- L1214: `int bcf_hdr_id2int(const bcf_hdr_t *hdr, int type, const char *id);`
+- L1215: `#define bcf_hdr_int2id(hdr,type,int_id) ((hdr)->id[type][int_id].key)`
+- L1221: `static inline int bcf_hdr_name2id(const bcf_hdr_t *hdr, const char *id) { return bcf_hdr_id2int(hdr, BCF_DT_CTG, id); }`
+- L1222: `static inline const char *bcf_hdr_id2name(const bcf_hdr_t *hdr, int rid)`
+- L1227: `static inline const char *bcf_seqname(const bcf_hdr_t *hdr, const bcf1_t *rec) {`
+- L1238: `static inline const char *bcf_seqname_safe(const bcf_hdr_t *hdr, const bcf1_t *rec) {`
+- L1257: `#define bcf_hdr_id2length(hdr,type,int_id)  ((hdr)->id[BCF_DT_ID][int_id].val->info[type]>>8 & 0xf)`
+- L1258: `#define bcf_hdr_id2number(hdr,type,int_id)  ((hdr)->id[BCF_DT_ID][int_id].val->info[type]>>12)`
+- L1259: `#define bcf_hdr_id2type(hdr,type,int_id)    (uint32_t)((hdr)->id[BCF_DT_ID][int_id].val->info[type]>>4 & 0xf)`
+- L1260: `#define bcf_hdr_id2coltype(hdr,type,int_id) (uint32_t)((hdr)->id[BCF_DT_ID][int_id].val->info[type] & 0xf)`
+- L1261: `#define bcf_hdr_idinfo_exists(hdr,type,int_id)  ((int_id)>=0 && (int_id)<(hdr)->n[BCF_DT_ID] && (hdr)->id[BCF_DT_ID][int_id].val && bcf_hdr_id2coltype((hdr),(type),(int_id))!=0xf)`
+- L1262: `#define bcf_hdr_id2hrec(hdr,dict_type,col_type,int_id)    ((hdr)->id[(dict_type)==BCF_DT_CTG?BCF_DT_CTG:BCF_DT_ID][int_id].val->hrec[(dict_type)==BCF_DT_CTG?0:(col_type)])`
+- L1272: `HTSLIB_EXPORT`
+- L1273: `int bcf_fmt_array(kstring_t *s, int n, int type, void *data);`
+- L1275: `HTSLIB_EXPORT`
+- L1276: `uint8_t *bcf_fmt_sized_array(kstring_t *s, uint8_t *ptr);`
+- L1285: `HTSLIB_EXPORT`
+- L1286: `int bcf_enc_vchar(kstring_t *s, int l, const char *a);`
+- L1297: `HTSLIB_EXPORT`
+- L1298: `int bcf_enc_vint(kstring_t *s, int n, int32_t *a, int wsize);`
+- L1307: `HTSLIB_EXPORT`
+- L1308: `int bcf_enc_vfloat(kstring_t *s, int n, float *a);`
+- L1319: `#define bcf_itr_destroy(iter) hts_itr_destroy(iter)`
+- L1320: `#define bcf_itr_queryi(idx, tid, beg, end) hts_itr_query((idx), (tid), (beg), (end), bcf_readrec)`
+- L1321: `#define bcf_itr_querys(idx, hdr, s) bcf_itr_querys1((idx), (hdr), (s))`
+- L1323: `HTSLIB_EXPORT`
+- L1327: `static inline int bcf_itr_next(htsFile *htsfp, hts_itr_t *itr, void *r) {`
+- L1341: `#define bcf_index_load(fn) hts_idx_load(fn, HTS_FMT_CSI)`
+- L1342: `#define bcf_index_seqnames(idx, hdr, nptr) hts_idx_seqnames((idx),(nptr),(hts_id2name_f)(bcf_hdr_id2name),(hdr))`
+- L1351: `HTSLIB_EXPORT`
+- L1352: `hts_idx_t *bcf_index_load2(const char *fn, const char *fnidx);`
+- L1368: `Equivalent to hts_idx_load3(fn, fnidx, HTS_FMT_CSI, flags);`
+- L1370: `HTSLIB_EXPORT`
+- L1371: `hts_idx_t *bcf_index_load3(const char *fn, const char *fnidx, int flags);`
+- L1391: `HTSLIB_EXPORT`
+- L1392: `int bcf_index_build(const char *fn, int min_shift);`
+- L1408: `HTSLIB_EXPORT`
+- L1409: `int bcf_index_build2(const char *fn, const char *fnidx, int min_shift);`
+- L1426: `HTSLIB_EXPORT`
+- L1427: `int bcf_index_build3(const char *fn, const char *fnidx, int min_shift, int n_threads);`
+- L1439: `HTSLIB_EXPORT`
+- L1440: `int bcf_idx_init(htsFile *fp, bcf_hdr_t *h, int min_shift, const char *fnidx);`
+- L1446: `HTSLIB_EXPORT`
+- L1447: `int bcf_idx_save(htsFile *fp);`
+- L1466: `#define bcf_int8_vector_end  (-127)         /* INT8_MIN  + 1 */`
+- L1467: `#define bcf_int16_vector_end (-32767)       /* INT16_MIN + 1 */`
+- L1468: `#define bcf_int32_vector_end (-2147483647)  /* INT32_MIN + 1 */`
+- L1469: `#define bcf_int64_vector_end (-9223372036854775807LL)  /* INT64_MIN + 1 */`
+- L1470: `#define bcf_str_vector_end   0`
+- L1471: `#define bcf_int8_missing     (-128)          /* INT8_MIN  */`
+- L1472: `#define bcf_int16_missing    (-32767-1)      /* INT16_MIN */`
+- L1473: `#define bcf_int32_missing    (-2147483647-1) /* INT32_MIN */`
+- L1474: `#define bcf_int64_missing    (-9223372036854775807LL - 1LL)  /* INT64_MIN */`
+- L1482: `#define bcf_str_missing      BCF_BT_CHAR`
+- L1487: `#define BCF_MAX_BT_INT8  (0x7f)        /* INT8_MAX  */`
+- L1488: `#define BCF_MAX_BT_INT16 (0x7fff)      /* INT16_MAX */`
+- L1489: `#define BCF_MAX_BT_INT32 (0x7fffffff)  /* INT32_MAX */`
+- L1490: `#define BCF_MIN_BT_INT8  (-120)        /* INT8_MIN  + 8 */`
+- L1491: `#define BCF_MIN_BT_INT16 (-32760)      /* INT16_MIN + 8 */`
+- L1492: `#define BCF_MIN_BT_INT32 (-2147483640) /* INT32_MIN + 8 */`
+- L1494: `HTSLIB_EXPORT`
+- L1496: `HTSLIB_EXPORT`
+- L1498: `static inline void bcf_float_set(float *ptr, uint32_t value)`
+- L1504: `#define bcf_float_set_vector_end(x) bcf_float_set(&(x),bcf_float_vector_end)`
+- L1505: `#define bcf_float_set_missing(x)    bcf_float_set(&(x),bcf_float_missing)`
+- L1506: `static inline int bcf_float_is_missing(float f)`
+- L1512: `static inline int bcf_float_is_vector_end(float f)`
+- L1531: `HTSLIB_EXPORT`
+- L1535: `static inline int bcf_format_gt(bcf_fmt_t *fmt, int isample, kstring_t *str)`
+- L1540: `static inline int bcf_enc_size(kstring_t *s, int size, int type)`
+- L1575: `static inline int bcf_enc_inttype(long x)`
+- L1582: `static inline int bcf_enc_int1(kstring_t *s, int32_t x)`
+- L1630: `static inline int64_t bcf_dec_int1(const uint8_t *p, int type, uint8_t **q)`
+- L1665: `static inline int64_t bcf_dec_typed_int1(const uint8_t *p, uint8_t **q)`
+- L1670: `static inline int32_t bcf_dec_size(const uint8_t *p, uint8_t **q, int *type)`
+
+## `vcf_sweep.h`
+
+- L27: `#define HTSLIB_VCF_SWEEP_H`
+- L36: `typedef struct bcf_sweep_t bcf_sweep_t;`
+- L38: `HTSLIB_EXPORT`
+- L39: `bcf_sweep_t *bcf_sweep_init(const char *fname);`
+- L41: `HTSLIB_EXPORT`
+- L42: `void bcf_sweep_destroy(bcf_sweep_t *sw);`
+- L44: `HTSLIB_EXPORT`
+- L45: `bcf_hdr_t *bcf_sweep_hdr(bcf_sweep_t *sw);`
+- L47: `HTSLIB_EXPORT`
+- L48: `bcf1_t *bcf_sweep_fwd(bcf_sweep_t *sw);`
+- L50: `HTSLIB_EXPORT`
+- L51: `bcf1_t *bcf_sweep_bwd(bcf_sweep_t *sw);`
+
+## `vcfutils.h`
+
+- L27: `#define HTSLIB_VCFUTILS_H`
+- L35: `struct kbitset_t;`
+- L47: `HTSLIB_EXPORT`
+- L48: `int bcf_trim_alleles(const bcf_hdr_t *header, bcf1_t *line);`
+- L60: `HTSLIB_EXPORT`
+- L61: `int bcf_remove_alleles(const bcf_hdr_t *header, bcf1_t *line, int mask) HTS_DEPRECATED("Please use bcf_remove_allele_set instead");`
+- L74: `HTSLIB_EXPORT`
+- L75: `int bcf_remove_allele_set(const bcf_hdr_t *header, bcf1_t *line, const struct kbitset_t *rm_set);`
+- L90: `HTSLIB_EXPORT`
+- L91: `int bcf_calc_ac(const bcf_hdr_t *header, bcf1_t *line, int *ac, int which);`
+- L109: `#define GT_HOM_RR 0 // note: the actual value of GT_* matters, used in dosage r2 calculation`
+- L110: `#define GT_HOM_AA 1`
+- L111: `#define GT_HET_RA 2`
+- L112: `#define GT_HET_AA 3`
+- L113: `#define GT_HAPL_R 4`
+- L114: `#define GT_HAPL_A 5`
+- L115: `#define GT_UNKN   6`
+- L116: `HTSLIB_EXPORT`
+- L117: `int bcf_gt_type(bcf_fmt_t *fmt_ptr, int isample, int *ial, int *jal);`
+- L119: `static inline int bcf_acgt2int(char c)`
+- L129: `#define bcf_int2acgt(i) "ACGT"[i]`
+- L137: `#define bcf_ij2G(i, j) ((j)*((j)+1)/2+(i))`
+
