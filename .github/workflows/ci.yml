@@ -18,9 +18,6 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply noodles compatibility patch
-        run: git -C noodles apply -p1 ../patches/noodles-htslib-rs.patch
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.89.0
         with:
