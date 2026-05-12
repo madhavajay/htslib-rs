@@ -1,0 +1,339 @@
+diff --git i/noodles-bcf/src/record/codec/decoder/samples/values.rs w/noodles-bcf/src/record/codec/decoder/samples/values.rs
+index 41aabeb0e..589911c01 100644
+--- i/noodles-bcf/src/record/codec/decoder/samples/values.rs
++++ w/noodles-bcf/src/record/codec/decoder/samples/values.rs
+@@ -408,7 +408,7 @@ pub(super) fn read_genotype_values(
+                 for _ in 0..sample_count {
+                     let value = read_i8(src)
+                         .map_err(DecodeError::InvalidRawValue)
+-                        .and_then(|v| parse_genotype_values(&[v]))
++                        .and_then(|v| parse_genotype_values(&[normalize_i8_genotype_value(v)]))
+                         .map(Value::Genotype)?;
+ 
+                     values.push(Some(value));
+@@ -417,6 +417,56 @@ pub(super) fn read_genotype_values(
+             _ => {
+                 for _ in 0..sample_count {
+                     let buf = read_i8s(src, len).map_err(DecodeError::InvalidRawValue)?;
++                    let raw_values = buf
++                        .into_iter()
++                        .map(normalize_i8_genotype_value)
++                        .collect::<Vec<_>>();
++                    let genotype = parse_genotype_values(&raw_values)?;
++                    let value = Value::Genotype(genotype);
++                    values.push(Some(value));
++                }
++            }
++        },
++        Some(Type::Int16(len)) => match len {
++            0 => values.push(None),
++            1 => {
++                for _ in 0..sample_count {
++                    let value = read_i16(src)
++                        .map_err(DecodeError::InvalidRawValue)
++                        .and_then(|v| parse_genotype_values(&[normalize_i16_genotype_value(v)]))
++                        .map(Value::Genotype)?;
++
++                    values.push(Some(value));
++                }
++            }
++            _ => {
++                for _ in 0..sample_count {
++                    let buf = read_i16s(src, len).map_err(DecodeError::InvalidRawValue)?;
++                    let raw_values = buf
++                        .into_iter()
++                        .map(normalize_i16_genotype_value)
++                        .collect::<Vec<_>>();
++                    let genotype = parse_genotype_values(&raw_values)?;
++                    let value = Value::Genotype(genotype);
++                    values.push(Some(value));
++                }
++            }
++        },
++        Some(Type::Int32(len)) => match len {
++            0 => values.push(None),
++            1 => {
++                for _ in 0..sample_count {
++                    let value = read_i32(src)
++                        .map_err(DecodeError::InvalidRawValue)
++                        .and_then(|v| parse_genotype_values(&[v]))
++                        .map(Value::Genotype)?;
++
++                    values.push(Some(value));
++                }
++            }
++            _ => {
++                for _ in 0..sample_count {
++                    let buf = read_i32s(src, len).map_err(DecodeError::InvalidRawValue)?;
+                     let genotype = parse_genotype_values(&buf)?;
+                     let value = Value::Genotype(genotype);
+                     values.push(Some(value));
+@@ -429,7 +479,21 @@ pub(super) fn read_genotype_values(
+     Ok(values)
+ }
+ 
+-fn parse_genotype_values(values: &[i8]) -> Result<Genotype, DecodeError> {
++fn normalize_i8_genotype_value(value: i8) -> i32 {
++    match Int8::from(value) {
++        Int8::EndOfVector => i32::from(Int32::EndOfVector),
++        _ => i32::from(value),
++    }
++}
++
++fn normalize_i16_genotype_value(value: i16) -> i32 {
++    match Int16::from(value) {
++        Int16::EndOfVector => i32::from(Int32::EndOfVector),
++        _ => i32::from(value),
++    }
++}
++
++fn parse_genotype_values(values: &[i32]) -> Result<Genotype, DecodeError> {
+     use noodles_vcf::variant::{
+         record::samples::series::value::genotype::Phasing,
+         record_buf::samples::sample::value::genotype::Allele,
+@@ -438,7 +502,7 @@ fn parse_genotype_values(values: &[i8]) -> Result<Genotype, DecodeError> {
+     let mut alleles = Vec::with_capacity(values.len());
+ 
+     for &value in values {
+-        if let Int8::EndOfVector = Int8::from(value) {
++        if let Int32::EndOfVector = Int32::from(value) {
+             break;
+         }
+ 
+@@ -818,7 +882,7 @@ mod tests {
+         );
+ 
+         assert_eq!(
+-            parse_genotype_values(&[0x02, i8::from(Int8::EndOfVector)])?,
++            parse_genotype_values(&[0x02, i32::from(Int32::EndOfVector)])?,
+             [Allele::new(Some(0), Phasing::Unphased)]
+                 .into_iter()
+                 .collect()
+diff --git i/noodles-bcf/src/record/codec/encoder/samples/values.rs w/noodles-bcf/src/record/codec/encoder/samples/values.rs
+index e8032fcbf..1f3cfc168 100644
+--- i/noodles-bcf/src/record/codec/encoder/samples/values.rs
++++ w/noodles-bcf/src/record/codec/encoder/samples/values.rs
+@@ -628,6 +628,7 @@ where
+ {
+     let mut raw_values = Vec::with_capacity(values.len());
+     let mut max_len = 0;
++    let mut max_value = i32::MIN;
+ 
+     for value in values {
+         let raw_value = match value {
+@@ -637,10 +638,31 @@ where
+         };
+ 
+         max_len = cmp::max(max_len, raw_value.len());
++        max_value = cmp::max(
++            max_value,
++            raw_value.iter().copied().max().unwrap_or_default(),
++        );
+ 
+         raw_values.push(raw_value);
+     }
+ 
++    if max_value <= i32::from(Int8::MAX_VALUE) {
++        write_int8_genotype_values(writer, &raw_values, max_len)
++    } else if max_value <= i32::from(Int16::MAX_VALUE) {
++        write_int16_genotype_values(writer, &raw_values, max_len)
++    } else {
++        write_int32_genotype_values(writer, &raw_values, max_len)
++    }
++}
++
++fn write_int8_genotype_values<W>(
++    writer: &mut W,
++    raw_values: &[Vec<i32>],
++    max_len: usize,
++) -> io::Result<()>
++where
++    W: Write,
++{
+     write_type(writer, Some(Type::Int8(max_len)))?;
+ 
+     for raw_value in raw_values {
+@@ -648,36 +670,93 @@ where
+         let pad = max_len - len;
+ 
+         for n in raw_value {
+-            let m = u8::try_from(n).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+-            writer.write_all(&[m])?;
++            let m = i8::try_from(*n).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
++            write_i8(writer, m)?;
++        }
+ 
+-            for _ in 0..pad {
+-                writer.write_all(&[i8::from(Int8::EndOfVector) as u8])?;
+-            }
++        for _ in 0..pad {
++            write_i8(writer, i8::from(Int8::EndOfVector))?;
+         }
+     }
+ 
+     Ok(())
+ }
+ 
+-fn encode_genotype_str(genotype: &str) -> io::Result<Vec<i8>> {
++fn write_int16_genotype_values<W>(
++    writer: &mut W,
++    raw_values: &[Vec<i32>],
++    max_len: usize,
++) -> io::Result<()>
++where
++    W: Write,
++{
++    write_type(writer, Some(Type::Int16(max_len)))?;
++
++    for raw_value in raw_values {
++        let len = raw_value.len();
++        let pad = max_len - len;
++
++        for n in raw_value {
++            let m =
++                i16::try_from(*n).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
++            write_i16_le(writer, m)?;
++        }
++
++        for _ in 0..pad {
++            write_i16_le(writer, i16::from(Int16::EndOfVector))?;
++        }
++    }
++
++    Ok(())
++}
++
++fn write_int32_genotype_values<W>(
++    writer: &mut W,
++    raw_values: &[Vec<i32>],
++    max_len: usize,
++) -> io::Result<()>
++where
++    W: Write,
++{
++    write_type(writer, Some(Type::Int32(max_len)))?;
++
++    for raw_value in raw_values {
++        let len = raw_value.len();
++        let pad = max_len - len;
++
++        for n in raw_value {
++            write_i32_le(writer, *n)?;
++        }
++
++        for _ in 0..pad {
++            write_i32_le(writer, i32::from(Int32::EndOfVector))?;
++        }
++    }
++
++    Ok(())
++}
++
++fn encode_genotype_str(genotype: &str) -> io::Result<Vec<i32>> {
+     const MISSING_ALLELE: &str = ".";
+ 
+     fn is_phasing(c: char) -> bool {
+         matches!(c, '|' | '/')
+     }
+ 
+-    fn encode(s: &str, phasing: &str) -> io::Result<i8> {
++    fn encode(s: &str, phasing: &str) -> io::Result<i32> {
+         if s == MISSING_ALLELE {
+             return Ok(0);
+         }
+ 
+-        let j: i8 = s
++        let j: i32 = s
+             .parse()
+             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+         let is_phased = phasing == "|";
+ 
+-        let mut i = (j + 1) << 1;
++        let mut i = j
++            .checked_add(1)
++            .and_then(|n| n.checked_shl(1))
++            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid genotype"))?;
+ 
+         if is_phased {
+             i |= 0x01;
+@@ -703,15 +782,18 @@ fn encode_genotype_str(genotype: &str) -> io::Result<Vec<i8>> {
+     Ok(values)
+ }
+ 
+-fn encode_genotype(genotype: &dyn Genotype) -> io::Result<Vec<i8>> {
+-    fn encode(position: Option<usize>, phasing: Phasing) -> io::Result<i8> {
++fn encode_genotype(genotype: &dyn Genotype) -> io::Result<Vec<i32>> {
++    fn encode(position: Option<usize>, phasing: Phasing) -> io::Result<i32> {
+         let i = if let Some(position) = position {
+-            i8::try_from(position).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
++            i32::try_from(position).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+         } else {
+             return Ok(0);
+         };
+ 
+-        let mut n = (i + 1) << 1;
++        let mut n = i
++            .checked_add(1)
++            .and_then(|m| m.checked_shl(1))
++            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid genotype"))?;
+ 
+         if phasing == Phasing::Phased {
+             n |= 0x01;
+diff --git i/noodles-sam/src/io/writer/header/record/value/map/reference_sequence/length.rs w/noodles-sam/src/io/writer/header/record/value/map/reference_sequence/length.rs
+index 15e8d01f8..5945b0900 100644
+--- i/noodles-sam/src/io/writer/header/record/value/map/reference_sequence/length.rs
++++ w/noodles-sam/src/io/writer/header/record/value/map/reference_sequence/length.rs
+@@ -18,10 +18,7 @@ where
+     writer.write_all(tag::LENGTH.as_ref())?;
+     write_separator(writer)?;
+ 
+-    let n = i32::try_from(usize::from(length))
+-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+-
+-    num::write_i32(writer, n)?;
++    num::write_usize(writer, usize::from(length))?;
+ 
+     Ok(())
+ }
+diff --git i/noodles-sam/src/io/writer/record/position.rs w/noodles-sam/src/io/writer/record/position.rs
+index 27c07e2c4..77f3a023f 100644
+--- i/noodles-sam/src/io/writer/record/position.rs
++++ w/noodles-sam/src/io/writer/record/position.rs
+@@ -4,23 +4,12 @@ use noodles_core::Position;
+ 
+ use crate::io::writer::num;
+ 
+-// § 1.4 "The alignment section: mandatory fields" (2021-06-03): `[0, 2^31-1]`.
+-const MAX_POSITION_VALUE: usize = (1 << 31) - 1;
+-
+ pub(super) fn write_position<W>(writer: &mut W, position: Option<Position>) -> io::Result<()>
+ where
+     W: Write,
+ {
+     let n = position.map(usize::from).unwrap_or_default();
+-
+-    if n <= MAX_POSITION_VALUE {
+-        num::write_usize(writer, n)
+-    } else {
+-        Err(io::Error::new(
+-            io::ErrorKind::InvalidInput,
+-            format!("invalid position: expected position to be <= {MAX_POSITION_VALUE}, got {n}"),
+-        ))
+-    }
++    num::write_usize(writer, n)
+ }
+ 
+ #[cfg(test)]
+@@ -42,11 +31,7 @@ mod tests {
+         t(&mut buf, None, b"0")?;
+         t(&mut buf, Position::new(13), b"13")?;
+ 
+-        buf.clear();
+-        assert!(matches!(
+-            write_position(&mut buf, Position::new(MAX_POSITION_VALUE + 1)),
+-            Err(e) if e.kind() == io::ErrorKind::InvalidInput,
+-        ));
++        t(&mut buf, Position::new(1 << 33), b"8589934592")?;
+ 
+         Ok(())
+     }

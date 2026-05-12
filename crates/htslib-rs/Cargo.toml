@@ -1,0 +1,11 @@
+[package]
+name = "htslib-rs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+flate2.workspace = true
+noodles.workspace = true
+regex.workspace = true
