@@ -12,7 +12,7 @@ use crate::{
     bcf,
     core::{Position, Region},
     index_compat::{associated_data_path, read_associated_bcf_index, read_associated_vcf_index},
-    region::{self, ParseFlags},
+    region::{self, HTS_POS_MAX, ParseError, ParseFlags},
     vcf,
 };
 use vcf::variant::io::Write as _;
@@ -3306,17 +3306,51 @@ fn parse_vcf_region(header: &Header, item: &str, one_coord: bool) -> io::Result<
     if one_coord {
         flags |= ParseFlags::ONE_COORD;
     }
-    let parsed = region::parse_region(
-        item,
-        |name| {
-            contig_names
-                .iter()
-                .position(|contig| contig == name)
-                .map(|i| i as i32)
-        },
-        flags,
-    )
-    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{e:?}")))?;
+
+    if let Some(rest) = item.strip_prefix('{')
+        && let Some(close) = rest.find('}')
+    {
+        let suffix = &rest[close + 1..];
+        if !suffix.is_empty() && !suffix.starts_with(':') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unexpected text after braced region name",
+            ));
+        }
+    }
+
+    let lookup = |name: &str| {
+        contig_names
+            .iter()
+            .position(|contig| contig == name)
+            .map(|i| i as i32)
+    };
+    let parsed = match region::parse_region(item, lookup, flags) {
+        Ok(parsed) => parsed,
+        Err(ParseError::Ambiguous) if !item.starts_with('{') && item.contains(':') => {
+            region::parse_region(
+                item,
+                |name| {
+                    if name == item {
+                        None
+                    } else {
+                        contig_names
+                            .iter()
+                            .position(|contig| contig == name)
+                            .map(|i| i as i32)
+                    }
+                },
+                flags,
+            )
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{e:?}")))?
+        }
+        Err(e) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{e:?}"),
+            ));
+        }
+    };
 
     if !parsed.rest.is_empty() {
         return Err(io::Error::new(
@@ -3340,7 +3374,7 @@ struct ParsedVcfRegion {
 }
 
 fn parsed_vcf_region_to_core_region(region: &ParsedVcfRegion) -> io::Result<Region> {
-    if region.start == 0 && region.end == i64::MAX {
+    if region.start == 0 && region.end == HTS_POS_MAX {
         return Ok(Region::new(region.reference_sequence_name.as_str(), ..));
     }
 
