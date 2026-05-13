@@ -2977,6 +2977,59 @@ where
     Ok(writer.into_inner().into_inner())
 }
 
+/// Writes records whose template overlaps a region to BAM output.
+///
+/// This mirrors the `samtools view -P -b <bam> <region>` behavior needed by
+/// downstream FASTQ extraction: first collect read names from the indexed
+/// region, then stream the full BAM and emit every record for those templates.
+/// If `include_unmapped` is true, unmapped records are retained as well.
+pub fn write_bam_templates_from_region_path<P, W>(
+    src: P,
+    region: &Region,
+    include_unmapped: bool,
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    W: Write,
+{
+    let template_names = template_names_in_bam_region(&src, region)?;
+    let mut reader = File::open(associated_data_path(&src)).map(bam::io::Reader::new)?;
+    let header = reader.read_header()?;
+    let mut writer = bam::io::Writer::new(dst);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records() {
+        let record = result?;
+        let keep_unmapped = include_unmapped && record.flags().is_unmapped();
+        let keep_template = record
+            .name()
+            .is_some_and(|name| template_names.contains::<[u8]>(name.as_ref()));
+        if keep_unmapped || keep_template {
+            writer.write_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish()?;
+
+    Ok(writer.into_inner().into_inner())
+}
+
+fn template_names_in_bam_region<P>(src: P, region: &Region) -> io::Result<HashSet<Vec<u8>>>
+where
+    P: AsRef<Path>,
+{
+    let mut names = HashSet::new();
+    for record in query_bam_records_from_path(src, region)? {
+        if let Some(name) = record.name() {
+            let bytes: &[u8] = name.as_ref();
+            names.insert(bytes.to_vec());
+        }
+    }
+    Ok(names)
+}
+
 /// Writes BAM input records with all required flag bits set to BAM output.
 pub fn write_bam_records_with_required_flags_from_path<P, W>(
     src: P,
