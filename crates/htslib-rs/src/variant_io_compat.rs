@@ -12,6 +12,7 @@ use crate::{
     bcf,
     core::{Position, Region},
     index_compat::{associated_data_path, read_associated_bcf_index, read_associated_vcf_index},
+    region::{self, ParseFlags},
     vcf,
 };
 use vcf::variant::io::Write as _;
@@ -458,6 +459,110 @@ pub struct VcfRecordAdapter {
     line: String,
 }
 
+/// Header dictionary translation plan for VCF records.
+///
+/// HTSlib's binary `bcf_translate` remaps integer dictionary IDs from a source
+/// header to a destination header. Text VCF records already carry string IDs,
+/// so this Rust-facing equivalent validates that record-local CHROM, FILTER,
+/// INFO, and FORMAT keys exist in the destination header and projects sample
+/// columns into the destination header order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VcfHeaderTranslation {
+    contigs: HashSet<String>,
+    filters: HashSet<String>,
+    infos: HashSet<String>,
+    formats: HashSet<String>,
+    sample_projection: Vec<Option<usize>>,
+}
+
+impl VcfHeaderTranslation {
+    /// Builds a translation plan from a source header into a destination header.
+    pub fn new(source: &Header, destination: &Header) -> io::Result<Self> {
+        let source_contigs = source.contigs().keys().cloned().collect::<HashSet<_>>();
+        let source_filters = source.filters().keys().cloned().collect::<HashSet<_>>();
+        let source_infos = source.infos().keys().cloned().collect::<HashSet<_>>();
+        let source_formats = source.formats().keys().cloned().collect::<HashSet<_>>();
+
+        let contigs = checked_header_namespace(
+            "contig",
+            &source_contigs,
+            destination.contigs().keys().cloned().collect(),
+        )?;
+        let filters = checked_header_namespace(
+            "FILTER",
+            &source_filters,
+            destination.filters().keys().cloned().collect(),
+        )?;
+        let infos = checked_header_namespace(
+            "INFO",
+            &source_infos,
+            destination.infos().keys().cloned().collect(),
+        )?;
+        let formats = checked_header_namespace(
+            "FORMAT",
+            &source_formats,
+            destination.formats().keys().cloned().collect(),
+        )?;
+
+        let source_samples = source.sample_names().iter().collect::<Vec<_>>();
+        let destination_samples = destination.sample_names().iter().collect::<Vec<_>>();
+        let sample_projection = destination_samples
+            .iter()
+            .map(|destination_sample| {
+                source_samples
+                    .iter()
+                    .position(|source_sample| source_sample == destination_sample)
+            })
+            .collect();
+
+        Ok(Self {
+            contigs,
+            filters,
+            infos,
+            formats,
+            sample_projection,
+        })
+    }
+
+    /// Translates a VCF record line according to the header plan.
+    pub fn translate_record_line(&self, line: &str) -> io::Result<String> {
+        let mut fields = split_vcf_line_fields(line)?;
+
+        if !self.contigs.contains(&fields[0]) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("destination header is missing contig {}", fields[0]),
+            ));
+        }
+
+        check_vcf_filter_keys(&fields[6], &self.filters)?;
+        check_vcf_info_keys(&fields[7], &self.infos)?;
+
+        if fields.len() >= 9 {
+            check_vcf_format_keys(&fields[8], &self.formats)?;
+
+            if fields.len() > 9 || !self.sample_projection.is_empty() {
+                let source_samples = fields[9..].to_vec();
+                fields.truncate(9);
+                fields.extend(self.sample_projection.iter().map(|index| {
+                    index
+                        .and_then(|i| source_samples.get(i))
+                        .cloned()
+                        .unwrap_or_else(|| ".".into())
+                }));
+            }
+        }
+
+        Ok(fields.join("\t"))
+    }
+
+    /// Translates a record adapter in place.
+    pub fn translate_adapter(&self, record: &mut VcfRecordAdapter) -> io::Result<()> {
+        record.line = self.translate_record_line(&record.line)?;
+        Ok(())
+    }
+}
+
 impl VcfRecordAdapter {
     /// Creates a VCF record adapter from a VCF record line.
     pub fn new(line: impl Into<String>) -> io::Result<Self> {
@@ -504,9 +609,68 @@ impl VcfRecordAdapter {
         Ok(())
     }
 
+    /// Sets the record ID field.
+    pub fn set_id(&mut self, id: &str) -> io::Result<()> {
+        self.line = update_vcf_line_id(&self.line, id)?;
+        Ok(())
+    }
+
+    /// Sets the one-based POS field.
+    pub fn set_position(&mut self, position: usize) -> io::Result<()> {
+        self.line = update_vcf_line_position(&self.line, position)?;
+        Ok(())
+    }
+
+    /// Sets or clears the QUAL field.
+    pub fn set_quality(&mut self, quality: Option<f32>) -> io::Result<()> {
+        self.line = update_vcf_line_quality(&self.line, quality)?;
+        Ok(())
+    }
+
+    /// Replaces the FILTER field.
+    pub fn set_filters(&mut self, filters: &[&str]) -> io::Result<()> {
+        self.line = update_vcf_line_filters(&self.line, filters)?;
+        Ok(())
+    }
+
+    /// Adds a FILTER value if it is not already present.
+    pub fn add_filter(&mut self, filter: &str) -> io::Result<()> {
+        self.line = add_vcf_line_filter(&self.line, filter)?;
+        Ok(())
+    }
+
+    /// Removes a FILTER value if it is present.
+    pub fn remove_filter(&mut self, filter: &str) -> io::Result<()> {
+        self.line = remove_vcf_line_filter(&self.line, filter)?;
+        Ok(())
+    }
+
+    /// Returns whether the FILTER field contains `filter`.
+    pub fn has_filter(&self, filter: &str) -> io::Result<bool> {
+        vcf_line_has_filter(&self.line, filter)
+    }
+
     /// Sets or removes typed INFO integer values.
     pub fn set_info_i32(&mut self, key: &str, values: Option<&[i32]>) -> io::Result<()> {
         self.line = update_vcf_line_info_i32(&self.line, key, values)?;
+        Ok(())
+    }
+
+    /// Sets or removes typed INFO float values.
+    pub fn set_info_f32(&mut self, key: &str, values: Option<&[f32]>) -> io::Result<()> {
+        self.line = update_vcf_line_info_f32(&self.line, key, values)?;
+        Ok(())
+    }
+
+    /// Sets or removes an INFO string value.
+    pub fn set_info_string(&mut self, key: &str, value: Option<&str>) -> io::Result<()> {
+        self.line = update_vcf_line_info_string(&self.line, key, value)?;
+        Ok(())
+    }
+
+    /// Sets or removes an INFO flag.
+    pub fn set_info_flag(&mut self, key: &str, present: bool) -> io::Result<()> {
+        self.line = update_vcf_line_info_flag(&self.line, key, present)?;
         Ok(())
     }
 
@@ -516,11 +680,101 @@ impl VcfRecordAdapter {
         Ok(())
     }
 
+    /// Sets or removes per-sample FORMAT values.
+    pub fn set_format_sample_values(
+        &mut self,
+        key: &str,
+        values: Option<&[String]>,
+    ) -> io::Result<()> {
+        self.line = update_vcf_line_format_sample_values(&self.line, key, values)?;
+        Ok(())
+    }
+
+    /// Sets or removes typed FORMAT float values, one scalar per sample.
+    pub fn set_format_f32(&mut self, key: &str, values: Option<&[f32]>) -> io::Result<()> {
+        self.line = update_vcf_line_format_f32(&self.line, key, values)?;
+        Ok(())
+    }
+
+    /// Sets or removes genotypes from the FORMAT/GT field.
+    pub fn set_genotypes(&mut self, values: Option<&[String]>) -> io::Result<()> {
+        self.set_format_sample_values("GT", values)
+    }
+
     /// Removes alternate alleles using HTSlib-style vector trimming.
     pub fn remove_alleles(&mut self, remove_alleles: &[usize]) -> io::Result<()> {
         self.line = remove_vcf_allele_set_from_line(&self.line, remove_alleles)?;
         Ok(())
     }
+}
+
+fn checked_header_namespace(
+    namespace: &str,
+    source: &HashSet<String>,
+    destination: HashSet<String>,
+) -> io::Result<HashSet<String>> {
+    for id in source {
+        if !destination.contains(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("destination header is missing {namespace} ID {id}"),
+            ));
+        }
+    }
+
+    Ok(destination)
+}
+
+fn check_vcf_filter_keys(filter: &str, destination: &HashSet<String>) -> io::Result<()> {
+    if filter == "." || filter == "PASS" {
+        return Ok(());
+    }
+
+    for key in filter.split(';') {
+        if !destination.contains(key) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("destination header is missing FILTER ID {key}"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn check_vcf_info_keys(info: &str, destination: &HashSet<String>) -> io::Result<()> {
+    if info == "." {
+        return Ok(());
+    }
+
+    for field in info.split(';') {
+        let key = field.split_once('=').map(|(key, _)| key).unwrap_or(field);
+        if !destination.contains(key) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("destination header is missing INFO ID {key}"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn check_vcf_format_keys(format: &str, destination: &HashSet<String>) -> io::Result<()> {
+    if format == "." {
+        return Ok(());
+    }
+
+    for key in format.split(':') {
+        if !destination.contains(key) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("destination header is missing FORMAT ID {key}"),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 const TEST_VCF_API_SERIALIZATION_HEADER: &str = concat!(
@@ -1195,6 +1449,86 @@ pub fn update_vcf_line_alleles(line: &str, alleles: &[&str]) -> io::Result<Strin
     Ok(fields.join("\t"))
 }
 
+/// Updates the ID field in a VCF record line.
+pub fn update_vcf_line_id(line: &str, id: &str) -> io::Result<String> {
+    let mut fields = split_vcf_line_fields(line)?;
+    fields[2] = if id.is_empty() { ".".into() } else { id.into() };
+
+    Ok(fields.join("\t"))
+}
+
+/// Updates the one-based POS field in a VCF record line.
+pub fn update_vcf_line_position(line: &str, position: usize) -> io::Result<String> {
+    if position == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "VCF position must be one-based",
+        ));
+    }
+
+    let mut fields = split_vcf_line_fields(line)?;
+    fields[1] = position.to_string();
+
+    Ok(fields.join("\t"))
+}
+
+/// Updates or clears the QUAL field in a VCF record line.
+pub fn update_vcf_line_quality(line: &str, quality: Option<f32>) -> io::Result<String> {
+    let mut fields = split_vcf_line_fields(line)?;
+    fields[5] = quality
+        .map(format_f32_value)
+        .unwrap_or_else(|| ".".to_string());
+
+    Ok(fields.join("\t"))
+}
+
+/// Replaces the FILTER field in a VCF record line.
+pub fn update_vcf_line_filters(line: &str, filters: &[&str]) -> io::Result<String> {
+    let mut fields = split_vcf_line_fields(line)?;
+    fields[6] = normalize_filter_values(filters);
+
+    Ok(fields.join("\t"))
+}
+
+/// Adds a FILTER value to a VCF record line.
+pub fn add_vcf_line_filter(line: &str, filter: &str) -> io::Result<String> {
+    let mut fields = split_vcf_line_fields(line)?;
+    let mut filters = split_filter_values(&fields[6]);
+
+    if filter == "." || filter == "PASS" {
+        fields[6] = filter.into();
+    } else if !filters.iter().any(|existing| existing == filter) {
+        filters.retain(|existing| existing != "PASS");
+        filters.push(filter.to_string());
+        fields[6] = filters.join(";");
+    }
+
+    Ok(fields.join("\t"))
+}
+
+/// Removes a FILTER value from a VCF record line.
+pub fn remove_vcf_line_filter(line: &str, filter: &str) -> io::Result<String> {
+    let mut fields = split_vcf_line_fields(line)?;
+    let mut filters = split_filter_values(&fields[6]);
+    filters.retain(|existing| existing != filter);
+    fields[6] = if filters.is_empty() {
+        ".".into()
+    } else {
+        filters.join(";")
+    };
+
+    Ok(fields.join("\t"))
+}
+
+/// Returns whether a VCF record line has a FILTER value.
+pub fn vcf_line_has_filter(line: &str, filter: &str) -> io::Result<bool> {
+    let fields = split_vcf_line_fields(line)?;
+
+    Ok(split_filter_values(&fields[6])
+        .iter()
+        .any(|existing| existing == filter))
+}
+
 /// Updates or removes an integer INFO field in a VCF record line.
 pub fn update_vcf_line_info_i32(
     line: &str,
@@ -1207,14 +1541,74 @@ pub fn update_vcf_line_info_i32(
     Ok(fields.join("\t"))
 }
 
+/// Updates or removes a float INFO field in a VCF record line.
+pub fn update_vcf_line_info_f32(
+    line: &str,
+    key: &str,
+    values: Option<&[f32]>,
+) -> io::Result<String> {
+    let mut fields = split_vcf_line_fields(line)?;
+    fields[7] = update_keyed_semicolon_field(&fields[7], key, values.map(format_f32_values));
+
+    Ok(fields.join("\t"))
+}
+
+/// Updates or removes a string INFO field in a VCF record line.
+pub fn update_vcf_line_info_string(
+    line: &str,
+    key: &str,
+    value: Option<&str>,
+) -> io::Result<String> {
+    let mut fields = split_vcf_line_fields(line)?;
+    fields[7] = update_keyed_semicolon_field(&fields[7], key, value.map(str::to_string));
+
+    Ok(fields.join("\t"))
+}
+
+/// Updates or removes a flag INFO field in a VCF record line.
+pub fn update_vcf_line_info_flag(line: &str, key: &str, present: bool) -> io::Result<String> {
+    let mut fields = split_vcf_line_fields(line)?;
+    fields[7] = update_keyed_semicolon_field(
+        &fields[7],
+        key,
+        if present { Some(String::new()) } else { None },
+    );
+
+    Ok(fields.join("\t"))
+}
+
 /// Updates or removes an integer FORMAT field in a VCF record line.
 pub fn update_vcf_line_format_i32(
     line: &str,
     key: &str,
     values: Option<&[i32]>,
 ) -> io::Result<String> {
-    let mut fields = split_vcf_line_fields(line)?;
+    let values = values.map(|values| values.iter().map(i32::to_string).collect::<Vec<_>>());
+    update_vcf_line_format_sample_values(line, key, values.as_deref())
+}
 
+/// Updates or removes a float FORMAT field in a VCF record line.
+pub fn update_vcf_line_format_f32(
+    line: &str,
+    key: &str,
+    values: Option<&[f32]>,
+) -> io::Result<String> {
+    let values = values.map(|values| {
+        values
+            .iter()
+            .map(|n| format_f32_value(*n))
+            .collect::<Vec<_>>()
+    });
+    update_vcf_line_format_sample_values(line, key, values.as_deref())
+}
+
+/// Updates or removes a FORMAT field with already-formatted per-sample values.
+pub fn update_vcf_line_format_sample_values(
+    line: &str,
+    key: &str,
+    values: Option<&[String]>,
+) -> io::Result<String> {
+    let mut fields = split_vcf_line_fields(line)?;
     if fields.len() < 10 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -1272,6 +1666,30 @@ pub fn update_vcf_line_format_i32(
     Ok(fields.join("\t"))
 }
 
+fn split_filter_values(filter: &str) -> Vec<String> {
+    if filter == "." || filter.is_empty() {
+        Vec::new()
+    } else {
+        filter.split(';').map(str::to_string).collect()
+    }
+}
+
+fn normalize_filter_values(filters: &[&str]) -> String {
+    let mut values = filters
+        .iter()
+        .filter(|filter| !filter.is_empty() && **filter != ".")
+        .map(|filter| filter.to_string())
+        .collect::<Vec<_>>();
+
+    values.dedup();
+
+    if values.is_empty() {
+        ".".into()
+    } else {
+        values.join(";")
+    }
+}
+
 fn split_vcf_line_fields(line: &str) -> io::Result<Vec<String>> {
     let fields = line.split('\t').map(str::to_string).collect::<Vec<_>>();
 
@@ -1300,10 +1718,12 @@ fn update_keyed_semicolon_field(info: &str, key: &str, value: Option<String>) ->
     });
 
     match (position, value) {
+        (Some(i), Some(value)) if value.is_empty() => fields[i] = key.to_string(),
         (Some(i), Some(value)) => fields[i] = format!("{key}={value}"),
         (Some(i), None) => {
             fields.remove(i);
         }
+        (None, Some(value)) if value.is_empty() => fields.push(key.to_string()),
         (None, Some(value)) => fields.push(format!("{key}={value}")),
         (None, None) => {}
     }
@@ -1321,6 +1741,22 @@ fn format_i32_values(values: &[i32]) -> String {
         .map(i32::to_string)
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn format_f32_values(values: &[f32]) -> String {
+    values
+        .iter()
+        .map(|value| format_f32_value(*value))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_f32_value(value: f32) -> String {
+    if value.is_finite() && value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
 }
 
 fn is_symbolic_alternate(alt: &str) -> bool {
@@ -1578,7 +2014,7 @@ where
         .set_index(index)
         .build_from_path(data_path)?;
     let header = reader.read_header()?;
-    let regions = parse_vcf_region_list(&header, regions)?;
+    let regions = parse_vcf_region_list(&header, regions, true)?;
     let mut buf = raw_header.into_bytes();
     let mut writer = vcf::io::Writer::new(&mut buf);
     let mut remaining = limit.unwrap_or(usize::MAX);
@@ -2703,8 +3139,50 @@ fn synced_allele_summary(variant: &str) -> String {
         .join(",")
 }
 
+/// Region/target overlap mode used by bcftools `--regions-overlap` and
+/// `--targets-overlap`.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RegionOverlap {
+    /// Include records whose POS coordinate lies in the interval.
+    Pos,
+    /// Include records whose full record span overlaps the interval.
+    Record,
+    /// Include records whose variant-changing span overlaps the interval.
+    Variant,
+}
+
+impl TryFrom<u8> for RegionOverlap {
+    type Error = io::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Pos),
+            1 => Ok(Self::Record),
+            2 => Ok(Self::Variant),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "overlap mode must be 0, 1, or 2",
+            )),
+        }
+    }
+}
+
 /// Filters a local VCF file using HTSlib-style region syntax and returns VCF text.
+///
+/// This uses bcftools' region default: record-overlap semantics.
 pub fn filter_vcf_text_by_region_from_path<P>(path: P, regions: &str) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    filter_vcf_text_by_region_from_path_with_overlap(path, regions, RegionOverlap::Record)
+}
+
+/// Filters a local VCF file using HTSlib-style region syntax and a requested overlap mode.
+pub fn filter_vcf_text_by_region_from_path_with_overlap<P>(
+    path: P,
+    regions: &str,
+    overlap: RegionOverlap,
+) -> io::Result<String>
 where
     P: AsRef<Path>,
 {
@@ -2713,7 +3191,7 @@ where
         .map(BufReader::new)
         .map(vcf::io::Reader::new)?;
     let header = reader.read_header()?;
-    let intervals = parse_vcf_region_list(&header, regions)?;
+    let intervals = parse_vcf_region_list(&header, regions, true)?;
 
     let mut output = String::new();
 
@@ -2725,7 +3203,8 @@ where
             if line.starts_with("##fileformat=") && !text.contains("##FILTER=<ID=PASS,") {
                 output.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
             }
-        } else if line.starts_with("#CHROM") || vcf_line_matches_regions(line, &intervals)? {
+        } else if line.starts_with("#CHROM") || vcf_line_matches_regions(line, &intervals, overlap)?
+        {
             output.push_str(line);
             output.push('\n');
         }
@@ -2735,16 +3214,68 @@ where
 }
 
 /// Filters a local VCF file using HTSlib-style target syntax and returns VCF text.
+///
+/// This uses bcftools' target default: POS-only semantics, and supports a
+/// leading `^` to invert target membership.
 pub fn filter_vcf_text_by_target_from_path<P>(path: P, targets: &str) -> io::Result<String>
 where
     P: AsRef<Path>,
 {
-    filter_vcf_text_by_region_from_path(path, targets)
+    filter_vcf_text_by_target_from_path_with_overlap(path, targets, RegionOverlap::Pos)
 }
 
-fn parse_vcf_region_list(header: &Header, regions: &str) -> io::Result<Vec<ParsedVcfRegion>> {
+/// Filters a local VCF file using target syntax and a requested overlap mode.
+pub fn filter_vcf_text_by_target_from_path_with_overlap<P>(
+    path: P,
+    targets: &str,
+    overlap: RegionOverlap,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let (exclude, targets) = targets
+        .strip_prefix('^')
+        .map(|targets| (true, targets))
+        .unwrap_or((false, targets));
+    let text = std::fs::read_to_string(&path)?;
+    let mut reader = File::open(path)
+        .map(BufReader::new)
+        .map(vcf::io::Reader::new)?;
+    let header = reader.read_header()?;
+    let intervals = parse_vcf_region_list(&header, targets, true)?;
+
+    let mut output = String::new();
+
+    for line in text.lines() {
+        if line.starts_with("##") {
+            output.push_str(line);
+            output.push('\n');
+
+            if line.starts_with("##fileformat=") && !text.contains("##FILTER=<ID=PASS,") {
+                output.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+            }
+        } else if line.starts_with("#CHROM") {
+            output.push_str(line);
+            output.push('\n');
+        } else {
+            let matched = vcf_line_matches_regions(line, &intervals, overlap)?;
+            if matched != exclude {
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+fn parse_vcf_region_list(
+    header: &Header,
+    regions: &str,
+    one_coord: bool,
+) -> io::Result<Vec<ParsedVcfRegion>> {
     split_region_list(regions)
-        .map(|item| parse_vcf_region(header, item))
+        .map(|item| parse_vcf_region(header, item, one_coord))
         .collect()
 }
 
@@ -2769,78 +3300,36 @@ fn split_region_list(regions: &str) -> impl Iterator<Item = &str> {
     items.into_iter()
 }
 
-fn parse_vcf_region(header: &Header, region: &str) -> io::Result<ParsedVcfRegion> {
-    let (name, coordinates) = if let Some(rest) = region.strip_prefix('{') {
-        let close = rest
-            .find('}')
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing closing brace"))?;
-        let name = &rest[..close];
-        let suffix = &rest[close + 1..];
-        let coordinates = if suffix.is_empty() {
-            None
-        } else {
-            Some(suffix.strip_prefix(':').ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "invalid quoted region suffix")
-            })?)
-        };
-        (name, coordinates)
-    } else {
-        match region.split_once(':') {
-            Some((name, coordinates)) => (name, Some(coordinates)),
-            None => (region, None),
-        }
-    };
+fn parse_vcf_region(header: &Header, item: &str, one_coord: bool) -> io::Result<ParsedVcfRegion> {
+    let contig_names = header.contigs().keys().cloned().collect::<Vec<_>>();
+    let mut flags = ParseFlags::default();
+    if one_coord {
+        flags |= ParseFlags::ONE_COORD;
+    }
+    let parsed = region::parse_region(
+        item,
+        |name| {
+            contig_names
+                .iter()
+                .position(|contig| contig == name)
+                .map(|i| i as i32)
+        },
+        flags,
+    )
+    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{e:?}")))?;
 
-    if !header.contigs().contains_key(name) {
+    if !parsed.rest.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "unknown reference sequence",
+            "unexpected trailing region text",
         ));
     }
-
-    let (start, end) = match coordinates {
-        Some(coordinates) => parse_one_based_interval(coordinates)?,
-        None => (0, i64::MAX),
-    };
 
     Ok(ParsedVcfRegion {
-        reference_sequence_name: name.into(),
-        start,
-        end,
+        reference_sequence_name: contig_names[parsed.tid as usize].clone(),
+        start: parsed.start,
+        end: parsed.end,
     })
-}
-
-fn parse_one_based_interval(coordinates: &str) -> io::Result<(i64, i64)> {
-    let (start, end) = match coordinates.split_once('-') {
-        Some((start, end)) => (start, Some(end)),
-        None => (coordinates, None),
-    };
-    let start = start
-        .parse::<i64>()
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-
-    if start < 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "region start must be at least 1",
-        ));
-    }
-
-    let end = match end {
-        Some(end) => end
-            .parse::<i64>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
-        None => start,
-    };
-
-    if end < start {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "region end is before start",
-        ));
-    }
-
-    Ok((start - 1, end))
 }
 
 #[derive(Debug)]
@@ -2870,7 +3359,11 @@ fn parsed_vcf_region_to_core_region(region: &ParsedVcfRegion) -> io::Result<Regi
     ))
 }
 
-fn vcf_line_matches_regions(line: &str, intervals: &[ParsedVcfRegion]) -> io::Result<bool> {
+fn vcf_line_matches_regions(
+    line: &str,
+    intervals: &[ParsedVcfRegion],
+    overlap: RegionOverlap,
+) -> io::Result<bool> {
     let mut fields = line.split('\t');
     let reference_sequence_name = fields
         .next()
@@ -2881,12 +3374,89 @@ fn vcf_line_matches_regions(line: &str, intervals: &[ParsedVcfRegion]) -> io::Re
         .parse::<i64>()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
         - 1;
+    let _id = fields
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing ID field"))?;
+    let reference_bases = fields
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing REF field"))?;
+    let alternate_bases = fields
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing ALT field"))?;
+    let _qual = fields
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing QUAL field"))?;
+    let _filter = fields
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing FILTER field"))?;
+    let info = fields
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing INFO field"))?;
 
     Ok(intervals.iter().any(|interval| {
         interval.reference_sequence_name == reference_sequence_name
-            && interval.start <= position
-            && position < interval.end
+            && match overlap {
+                RegionOverlap::Pos => interval_contains_position(interval, position),
+                RegionOverlap::Record => {
+                    let record_end = vcf_record_end(position, reference_bases, info);
+                    intervals_overlap(position, record_end, interval.start, interval.end)
+                }
+                RegionOverlap::Variant => vcf_variant_overlaps_region(
+                    position,
+                    reference_bases,
+                    alternate_bases,
+                    info,
+                    interval,
+                ),
+            }
     }))
+}
+
+fn interval_contains_position(interval: &ParsedVcfRegion, position: i64) -> bool {
+    interval.start <= position && position < interval.end
+}
+
+fn intervals_overlap(start: i64, end: i64, other_start: i64, other_end: i64) -> bool {
+    start < other_end && other_start < end
+}
+
+fn vcf_record_end(position: i64, reference_bases: &str, info: &str) -> i64 {
+    let ref_end = position + reference_bases.len().max(1) as i64;
+    info.split(';')
+        .find_map(|field| field.strip_prefix("END="))
+        .and_then(|value| value.parse::<i64>().ok())
+        .map(|one_based_end| one_based_end.max(position + 1))
+        .unwrap_or(ref_end)
+}
+
+fn vcf_variant_overlaps_region(
+    position: i64,
+    reference_bases: &str,
+    alternate_bases: &str,
+    info: &str,
+    interval: &ParsedVcfRegion,
+) -> bool {
+    if let Some(end) = info
+        .split(';')
+        .find_map(|field| field.strip_prefix("END="))
+        .and_then(|value| value.parse::<i64>().ok())
+    {
+        return intervals_overlap(position, end, interval.start, interval.end);
+    }
+
+    let ref_len = reference_bases.len().max(1) as i64;
+    alternate_bases.split(',').any(|alternate| {
+        let alt_len = alternate.len().max(1) as i64;
+        if ref_len == alt_len {
+            interval_contains_position(interval, position)
+        } else if ref_len > alt_len {
+            let start = position + alt_len;
+            let end = position + ref_len;
+            intervals_overlap(start, end, interval.start, interval.end)
+        } else {
+            interval_contains_position(interval, position) && position + 1 < interval.end
+        }
+    })
 }
 
 fn read_synced_vcf_records<P>(path: P) -> io::Result<(Vec<String>, HashMap<SyncedKey, String>)>
@@ -3597,17 +4167,22 @@ mod tests {
     use std::{io::BufReader, path::PathBuf};
 
     use super::{
-        contig_count, count_bcf_records_from_path, count_bcf_records_in_region_from_path,
-        count_vcf_records_from_path, count_vcf_records_in_region_from_path,
-        read_bcf_header_from_path, read_vcf_header_from_path, sample_count,
-        write_bcf_csi_from_path,
+        RegionOverlap, VcfHeaderTranslation, contig_count, count_bcf_records_from_path,
+        count_bcf_records_in_region_from_path, count_vcf_records_from_path,
+        count_vcf_records_in_region_from_path, filter_vcf_text_by_region_from_path,
+        filter_vcf_text_by_region_from_path_with_overlap, filter_vcf_text_by_target_from_path,
+        filter_vcf_text_by_target_from_path_with_overlap, read_bcf_header_from_path,
+        read_vcf_header, read_vcf_header_from_path, sample_count, write_bcf_csi_from_path,
     };
     use crate::tabix_compat::{TextFormat, write_bgzf_and_index};
 
     fn fixture(path: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(path)
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        if path.starts_with("bcftools/") {
+            base.join("..").join(path)
+        } else {
+            base.join(path)
+        }
     }
 
     #[test]
@@ -3674,5 +4249,226 @@ mod tests {
         std::fs::remove_file(csi_path).unwrap();
 
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_header_translation_validates_record_dictionaries() {
+        let src = header_from_text(
+            "##fileformat=VCFv4.3\n\
+             ##contig=<ID=1>\n\
+             ##FILTER=<ID=q10,Description=\"q10\">\n\
+             ##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n\
+             ##INFO=<ID=DB,Number=0,Type=Flag,Description=\"dbSNP\">\n\
+             ##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+             ##FORMAT=<ID=GQ,Number=1,Type=Integer,Description=\"GQ\">\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n",
+        );
+        let dst = header_from_text(
+            "##fileformat=VCFv4.3\n\
+             ##FORMAT=<ID=GQ,Number=1,Type=Integer,Description=\"GQ\">\n\
+             ##INFO=<ID=DB,Number=0,Type=Flag,Description=\"dbSNP\">\n\
+             ##FILTER=<ID=q10,Description=\"q10\">\n\
+             ##contig=<ID=1>\n\
+             ##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n\
+             ##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS2\tS1\n",
+        );
+        let translation = VcfHeaderTranslation::new(&src, &dst).unwrap();
+
+        let translated = translation
+            .translate_record_line("1\t7\t.\tA\tC\t42\tq10\tDP=5;DB\tGT:GQ\t0/1:4\t1/1:9")
+            .unwrap();
+
+        assert_eq!(
+            translated,
+            "1\t7\t.\tA\tC\t42\tq10\tDP=5;DB\tGT:GQ\t1/1:9\t0/1:4"
+        );
+    }
+
+    #[test]
+    fn test_header_translation_rejects_missing_destination_ids() {
+        let src = header_from_text(
+            "##fileformat=VCFv4.3\n\
+             ##contig=<ID=1>\n\
+             ##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+        );
+        let dst = header_from_text(
+            "##fileformat=VCFv4.3\n\
+             ##contig=<ID=1>\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+        );
+
+        let err = VcfHeaderTranslation::new(&src, &dst).unwrap_err();
+
+        assert!(err.to_string().contains("missing INFO ID DP"));
+    }
+
+    #[test]
+    fn test_header_translation_fills_destination_only_samples() {
+        let src = header_from_text(
+            "##fileformat=VCFv4.3\n\
+             ##contig=<ID=1>\n\
+             ##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n",
+        );
+        let dst = header_from_text(
+            "##fileformat=VCFv4.3\n\
+             ##contig=<ID=1>\n\
+             ##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS2\tS1\n",
+        );
+        let translation = VcfHeaderTranslation::new(&src, &dst).unwrap();
+
+        let translated = translation
+            .translate_record_line("1\t1\t.\tA\tC\t.\tPASS\t.\tGT\t0/1")
+            .unwrap();
+
+        assert_eq!(translated, "1\t1\t.\tA\tC\t.\tPASS\t.\tGT\t.\t0/1");
+    }
+
+    #[test]
+    fn test_record_adapter_updates_core_fields_and_filters() {
+        let mut record =
+            super::VcfRecordAdapter::new("1\t10\told\tA\tC\t50\tPASS\t.\tGT\t0/1").unwrap();
+
+        record.set_position(11).unwrap();
+        record.set_id("rs1").unwrap();
+        record.set_quality(None).unwrap();
+        record.set_filters(&["q10", "s50"]).unwrap();
+        record.add_filter("q10").unwrap();
+        record.add_filter("lowDP").unwrap();
+        assert!(record.has_filter("q10").unwrap());
+        record.remove_filter("s50").unwrap();
+
+        assert_eq!(
+            record.as_str(),
+            "1\t11\trs1\tA\tC\t.\tq10;lowDP\t.\tGT\t0/1"
+        );
+    }
+
+    #[test]
+    fn test_record_adapter_updates_info_types() {
+        let mut record = super::VcfRecordAdapter::new("1\t10\t.\tA\tC\t.\t.\tDP=4").unwrap();
+
+        record.set_info_i32("AC", Some(&[1, 2])).unwrap();
+        record.set_info_f32("AF", Some(&[0.25, 1.0])).unwrap();
+        record.set_info_string("NOTE", Some("kept")).unwrap();
+        record.set_info_flag("DB", true).unwrap();
+        record.set_info_i32("DP", None).unwrap();
+
+        assert_eq!(
+            record.as_str(),
+            "1\t10\t.\tA\tC\t.\t.\tAC=1,2;AF=0.25,1;NOTE=kept;DB"
+        );
+
+        record.set_info_flag("DB", false).unwrap();
+        record.set_info_string("NOTE", None).unwrap();
+
+        assert_eq!(record.as_str(), "1\t10\t.\tA\tC\t.\t.\tAC=1,2;AF=0.25,1");
+    }
+
+    #[test]
+    fn test_record_adapter_updates_format_types_and_genotypes() {
+        let mut record =
+            super::VcfRecordAdapter::new("1\t10\t.\tA\tC\t.\t.\t.\tGT:DP\t0/0:4\t0/1:8").unwrap();
+
+        record.set_format_i32("DP", Some(&[5, 9])).unwrap();
+        record.set_format_f32("GP", Some(&[0.5, 1.0])).unwrap();
+        record
+            .set_genotypes(Some(&["1/1".to_string(), "./.".to_string()]))
+            .unwrap();
+
+        assert_eq!(
+            record.as_str(),
+            "1\t10\t.\tA\tC\t.\t.\t.\tGT:DP:GP\t1/1:5:0.5\t./.:9:1"
+        );
+
+        record.set_format_sample_values("GP", None).unwrap();
+
+        assert_eq!(
+            record.as_str(),
+            "1\t10\t.\tA\tC\t.\t.\t.\tGT:DP\t1/1:5\t./.:9"
+        );
+    }
+
+    #[test]
+    fn test_region_and_target_default_overlap_semantics() {
+        let path = fixture("bcftools/test/overlap.vcf");
+
+        let region = filter_vcf_text_by_region_from_path(&path, "chr1:100-200").unwrap();
+        let target = filter_vcf_text_by_target_from_path(&path, "chr1:100-200").unwrap();
+
+        assert_eq!(
+            body_lines(&region),
+            std::fs::read_to_string(fixture("bcftools/test/overlap.1.out")).unwrap()
+        );
+        assert_eq!(
+            body_lines(&target),
+            std::fs::read_to_string(fixture("bcftools/test/overlap.0.out")).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_target_overlap_modes_and_exclusion_match_bcftools_fixture() {
+        let path = fixture("bcftools/test/overlap.vcf");
+
+        for (mode, expected) in [
+            (RegionOverlap::Pos, "bcftools/test/overlap.0.out"),
+            (RegionOverlap::Record, "bcftools/test/overlap.1.out"),
+            (RegionOverlap::Variant, "bcftools/test/overlap.2.out"),
+        ] {
+            let output =
+                filter_vcf_text_by_target_from_path_with_overlap(&path, "chr1:100-200", mode)
+                    .unwrap();
+            assert_eq!(
+                body_lines(&output),
+                std::fs::read_to_string(fixture(expected)).unwrap()
+            );
+        }
+
+        for (mode, expected) in [
+            (RegionOverlap::Pos, "bcftools/test/overlap.neg0.out"),
+            (RegionOverlap::Record, "bcftools/test/overlap.neg1.out"),
+            (RegionOverlap::Variant, "bcftools/test/overlap.neg2.out"),
+        ] {
+            let output =
+                filter_vcf_text_by_target_from_path_with_overlap(&path, "^chr1:100-200", mode)
+                    .unwrap();
+            assert_eq!(
+                body_lines(&output),
+                std::fs::read_to_string(fixture(expected)).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_region_overlap_modes_match_bcftools_fixture() {
+        let path = fixture("bcftools/test/overlap.vcf");
+
+        for (mode, expected) in [
+            (RegionOverlap::Pos, "bcftools/test/overlap.0.out"),
+            (RegionOverlap::Record, "bcftools/test/overlap.1.out"),
+            (RegionOverlap::Variant, "bcftools/test/overlap.2.out"),
+        ] {
+            let output =
+                filter_vcf_text_by_region_from_path_with_overlap(&path, "chr1:100-200", mode)
+                    .unwrap();
+            assert_eq!(
+                body_lines(&output),
+                std::fs::read_to_string(fixture(expected)).unwrap()
+            );
+        }
+    }
+
+    fn body_lines(text: &str) -> String {
+        text.lines()
+            .filter(|line| !line.starts_with('#'))
+            .map(|line| format!("{line}\n"))
+            .collect()
+    }
+
+    fn header_from_text(text: &str) -> super::Header {
+        read_vcf_header(BufReader::new(text.as_bytes())).unwrap()
     }
 }
