@@ -43,6 +43,9 @@ pub struct SynchronizedPileupColumn {
     pub qualities_by_input: Vec<String>,
 }
 
+type SynchronizedPileupSite = (String, usize);
+type SynchronizedPileupEntry = (usize, usize, usize);
+
 /// A mutable adapter for HTSlib-style SAM header operations.
 pub struct SamHeaderAdapter<'a> {
     header: &'a mut Header,
@@ -360,10 +363,43 @@ pub struct AlignmentRecordSummary {
     quality_scores: Vec<u8>,
 }
 
+/// Split FASTA/FASTQ text outputs for paired-read extraction.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FastxSplitText {
+    pub read1: String,
+    pub read2: String,
+    pub singleton: String,
+}
+
 impl AlignmentRecordSummary {
     /// Returns the template length.
     pub fn template_length(&self) -> i32 {
         self.template_length
+    }
+
+    /// Returns the alignment flags as a `u16`.
+    pub fn flags_u16(&self) -> u16 {
+        self.flags.bits()
+    }
+
+    /// Returns the typed alignment flags.
+    pub fn flags(&self) -> sam::alignment::record::Flags {
+        self.flags
+    }
+
+    /// Returns the 0-based reference sequence id, if any.
+    pub fn reference_sequence_id(&self) -> Option<usize> {
+        self.reference_sequence_id
+    }
+
+    /// Returns the 0-based mate reference sequence id, if any.
+    pub fn mate_reference_sequence_id(&self) -> Option<usize> {
+        self.mate_reference_sequence_id
+    }
+
+    /// Returns the mapping quality, if any.
+    pub fn mapping_quality(&self) -> Option<u8> {
+        self.mapping_quality
     }
 }
 
@@ -557,6 +593,102 @@ where
     String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// Writes a FASTQ view of the first `limit` SAM records, optionally appending read numbers.
+pub fn view_sam_as_fastq_text_from_path_with_limit_and_suffix<P>(
+    src: P,
+    limit: Option<usize>,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src)
+        .map(BufReader::new)
+        .map(sam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records().take(limit.unwrap_or(usize::MAX)) {
+        let record = result?;
+        write_fastq_record_with_suffix(&mut writer, &record, append_read_number)?;
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTQ view of SAM records passing flag filters.
+pub fn view_sam_as_fastq_text_from_path_with_flag_filter<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src)
+        .map(BufReader::new)
+        .map(sam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_fastq_record(&mut writer, &record)?;
+        }
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTQ view of filtered SAM records, optionally appending read numbers.
+pub fn view_sam_as_fastq_text_from_path_with_flag_filter_and_suffix<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src)
+        .map(BufReader::new)
+        .map(sam::io::Reader::new)?;
+    view_sam_as_fastq_text_from_reader_with_flag_filter_and_suffix(
+        &mut reader,
+        require_flags,
+        exclude_flags,
+        exclude_all_flags,
+        append_read_number,
+    )
+}
+
+/// Writes a FASTQ view of filtered SAM records from any buffered reader.
+pub fn view_sam_as_fastq_text_from_reader_with_flag_filter_and_suffix<R>(
+    reader: &mut sam::io::Reader<R>,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    R: BufRead,
+{
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_fastq_record_with_suffix(&mut writer, &record, append_read_number)?;
+        }
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
 /// Writes a FASTA view of the first `limit` SAM records.
 pub fn view_sam_as_fasta_text_from_path_with_limit<P>(
     src: P,
@@ -577,6 +709,218 @@ where
     }
 
     String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTA view of the first `limit` SAM records, optionally appending read numbers.
+pub fn view_sam_as_fasta_text_from_path_with_limit_and_suffix<P>(
+    src: P,
+    limit: Option<usize>,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src)
+        .map(BufReader::new)
+        .map(sam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records().take(limit.unwrap_or(usize::MAX)) {
+        let record = result?;
+        write_fasta_record_with_suffix(&mut writer, &record, append_read_number)?;
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTA view of SAM records passing flag filters.
+pub fn view_sam_as_fasta_text_from_path_with_flag_filter<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src)
+        .map(BufReader::new)
+        .map(sam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_fasta_record(&mut writer, &record)?;
+        }
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTA view of filtered SAM records, optionally appending read numbers.
+pub fn view_sam_as_fasta_text_from_path_with_flag_filter_and_suffix<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src)
+        .map(BufReader::new)
+        .map(sam::io::Reader::new)?;
+    view_sam_as_fasta_text_from_reader_with_flag_filter_and_suffix(
+        &mut reader,
+        require_flags,
+        exclude_flags,
+        exclude_all_flags,
+        append_read_number,
+    )
+}
+
+/// Writes a FASTA view of filtered SAM records from any buffered reader.
+pub fn view_sam_as_fasta_text_from_reader_with_flag_filter_and_suffix<R>(
+    reader: &mut sam::io::Reader<R>,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    R: BufRead,
+{
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_fasta_record_with_suffix(&mut writer, &record, append_read_number)?;
+        }
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes split FASTQ views of SAM records passing flag filters.
+pub fn view_sam_as_fastq_split_text_from_path_with_flag_filter_and_suffix<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<FastxSplitText>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src)
+        .map(BufReader::new)
+        .map(sam::io::Reader::new)?;
+    view_sam_as_fastq_split_text_from_reader_with_flag_filter_and_suffix(
+        &mut reader,
+        require_flags,
+        exclude_flags,
+        exclude_all_flags,
+        append_read_number,
+    )
+}
+
+/// Writes split FASTQ views of filtered SAM records from any buffered reader.
+pub fn view_sam_as_fastq_split_text_from_reader_with_flag_filter_and_suffix<R>(
+    reader: &mut sam::io::Reader<R>,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<FastxSplitText>
+where
+    R: BufRead,
+{
+    view_sam_as_fastq_split_text_from_reader_with_flag_filter_suffix_and_aux(
+        reader,
+        require_flags,
+        exclude_flags,
+        exclude_all_flags,
+        append_read_number,
+        None,
+    )
+}
+
+/// Writes split FASTQ views of filtered SAM records from any buffered reader, preserving selected aux tags.
+pub fn view_sam_as_fastq_split_text_from_reader_with_flag_filter_suffix_and_aux<R>(
+    reader: &mut sam::io::Reader<R>,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+    aux_tags: Option<&[[u8; 2]]>,
+) -> io::Result<FastxSplitText>
+where
+    R: BufRead,
+{
+    let _header = reader.read_header()?;
+    let mut split = FastxSplitBuffers::default();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_split_fastq_record_with_aux(&mut split, &record, append_read_number, aux_tags)?;
+        }
+    }
+
+    split.into_text()
+}
+
+/// Writes split FASTA views of SAM records passing flag filters.
+pub fn view_sam_as_fasta_split_text_from_path_with_flag_filter_and_suffix<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<FastxSplitText>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src)
+        .map(BufReader::new)
+        .map(sam::io::Reader::new)?;
+    view_sam_as_fasta_split_text_from_reader_with_flag_filter_and_suffix(
+        &mut reader,
+        require_flags,
+        exclude_flags,
+        exclude_all_flags,
+        append_read_number,
+    )
+}
+
+/// Writes split FASTA views of filtered SAM records from any buffered reader.
+pub fn view_sam_as_fasta_split_text_from_reader_with_flag_filter_and_suffix<R>(
+    reader: &mut sam::io::Reader<R>,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<FastxSplitText>
+where
+    R: BufRead,
+{
+    let _header = reader.read_header()?;
+    let mut split = FastxSplitBuffers::default();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_split_fasta_record(&mut split, &record, append_read_number)?;
+        }
+    }
+
+    split.into_text()
 }
 
 /// Applies existing `BQ:Z` BAQ tags to SAM quality strings and renames them to `ZQ:Z`.
@@ -1523,7 +1867,48 @@ where
     W: Write,
     R: sam::alignment::Record + ?Sized,
 {
+    write_fastq_record_with_suffix(writer, record, false)
+}
+
+fn write_fastq_record_with_suffix<W, R>(
+    writer: &mut W,
+    record: &R,
+    append_read_number: bool,
+) -> io::Result<()>
+where
+    W: Write,
+    R: sam::alignment::Record + ?Sized,
+{
     let name = fastx_record_name(record)?;
+    let name = append_fastx_read_number(name, record, append_read_number)?;
+    write_fastq_record_with_name_and_aux(writer, record, &name, None)
+}
+
+fn write_fastq_record_with_suffix_and_aux<W, R>(
+    writer: &mut W,
+    record: &R,
+    append_read_number: bool,
+    aux_tags: Option<&[[u8; 2]]>,
+) -> io::Result<()>
+where
+    W: Write,
+    R: sam::alignment::Record + ?Sized,
+{
+    let name = fastx_record_name(record)?;
+    let name = append_fastx_read_number(name, record, append_read_number)?;
+    write_fastq_record_with_name_and_aux(writer, record, &name, aux_tags)
+}
+
+fn write_fastq_record_with_name_and_aux<W, R>(
+    writer: &mut W,
+    record: &R,
+    name: &str,
+    aux_tags: Option<&[[u8; 2]]>,
+) -> io::Result<()>
+where
+    W: Write,
+    R: sam::alignment::Record + ?Sized,
+{
     let sequence = sequence_string(record).unwrap_or_default();
     let quality = fastq_quality_scores_string(record)?;
 
@@ -1534,7 +1919,11 @@ where
         ));
     }
 
-    writeln!(writer, "@{name}")?;
+    write!(writer, "@{name}")?;
+    for field in fastq_aux_fields(record, aux_tags)? {
+        write!(writer, "\t{field}")?;
+    }
+    writeln!(writer)?;
     writeln!(writer, "{sequence}")?;
     writeln!(writer, "+")?;
     writeln!(writer, "{quality}")?;
@@ -1542,12 +1931,206 @@ where
     Ok(())
 }
 
+fn fastq_aux_fields<R>(record: &R, aux_tags: Option<&[[u8; 2]]>) -> io::Result<Vec<String>>
+where
+    R: sam::alignment::Record + ?Sized,
+{
+    let Some(aux_tags) = aux_tags else {
+        return Ok(Vec::new());
+    };
+
+    record
+        .data()
+        .iter()
+        .filter_map(|result| match result {
+            Ok((tag, value)) => {
+                let tag_bytes = <[u8; 2]>::from(tag);
+                aux_tags
+                    .iter()
+                    .any(|wanted| wanted == &tag_bytes)
+                    .then_some((tag_bytes, value))
+                    .map(Ok)
+            }
+            Err(e) => Some(Err(e)),
+        })
+        .filter_map(|result| match result {
+            Ok((tag, value)) => format_fastq_aux_field(&tag, value).map(Ok),
+            Err(e) => Some(Err(e)),
+        })
+        .collect()
+}
+
+fn format_fastq_aux_field(
+    tag: &[u8; 2],
+    value: sam::alignment::record::data::field::Value<'_>,
+) -> Option<String> {
+    use sam::alignment::record::data::field::Value;
+
+    let tag = std::str::from_utf8(tag).ok()?;
+    match value {
+        Value::Character(n) => Some(format!("{tag}:A:{}", char::from(n))),
+        Value::Int8(n) => Some(format!("{tag}:i:{n}")),
+        Value::UInt8(n) => Some(format!("{tag}:i:{n}")),
+        Value::Int16(n) => Some(format!("{tag}:i:{n}")),
+        Value::UInt16(n) => Some(format!("{tag}:i:{n}")),
+        Value::Int32(n) => Some(format!("{tag}:i:{n}")),
+        Value::UInt32(n) => Some(format!("{tag}:i:{n}")),
+        Value::Float(n) => Some(format!("{tag}:f:{n:e}")),
+        Value::String(s) => Some(format!("{tag}:Z:{}", String::from_utf8_lossy(s))),
+        Value::Hex(s) => Some(format!("{tag}:H:{}", String::from_utf8_lossy(s))),
+        Value::Array(_) => None,
+    }
+}
+
+#[derive(Default)]
+struct FastxSplitBuffers {
+    read1: Vec<u8>,
+    read2: Vec<u8>,
+    singleton: Vec<u8>,
+}
+
+impl FastxSplitBuffers {
+    fn into_text(self) -> io::Result<FastxSplitText> {
+        Ok(FastxSplitText {
+            read1: String::from_utf8(self.read1)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            read2: String::from_utf8(self.read2)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            singleton: String::from_utf8(self.singleton)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        })
+    }
+}
+
+enum FastxSplitTarget {
+    Read1,
+    Read2,
+    Singleton,
+}
+
+fn fastx_split_target<R>(record: &R) -> io::Result<FastxSplitTarget>
+where
+    R: sam::alignment::Record + ?Sized,
+{
+    let flags = record.flags()?;
+    if flags.is_first_segment() {
+        Ok(FastxSplitTarget::Read1)
+    } else if flags.is_last_segment() {
+        Ok(FastxSplitTarget::Read2)
+    } else {
+        Ok(FastxSplitTarget::Singleton)
+    }
+}
+
+fn write_split_fastq_record<R>(
+    split: &mut FastxSplitBuffers,
+    record: &R,
+    append_read_number: bool,
+) -> io::Result<()>
+where
+    R: sam::alignment::Record + ?Sized,
+{
+    match fastx_split_target(record)? {
+        FastxSplitTarget::Read1 => {
+            write_fastq_record_with_suffix(&mut split.read1, record, append_read_number)
+        }
+        FastxSplitTarget::Read2 => {
+            write_fastq_record_with_suffix(&mut split.read2, record, append_read_number)
+        }
+        FastxSplitTarget::Singleton => {
+            write_fastq_record_with_suffix(&mut split.singleton, record, append_read_number)
+        }
+    }
+}
+
+fn write_split_fastq_record_with_aux<R>(
+    split: &mut FastxSplitBuffers,
+    record: &R,
+    append_read_number: bool,
+    aux_tags: Option<&[[u8; 2]]>,
+) -> io::Result<()>
+where
+    R: sam::alignment::Record + ?Sized,
+{
+    match fastx_split_target(record)? {
+        FastxSplitTarget::Read1 => write_fastq_record_with_suffix_and_aux(
+            &mut split.read1,
+            record,
+            append_read_number,
+            aux_tags,
+        ),
+        FastxSplitTarget::Read2 => write_fastq_record_with_suffix_and_aux(
+            &mut split.read2,
+            record,
+            append_read_number,
+            aux_tags,
+        ),
+        FastxSplitTarget::Singleton => write_fastq_record_with_suffix_and_aux(
+            &mut split.singleton,
+            record,
+            append_read_number,
+            aux_tags,
+        ),
+    }
+}
+
+fn write_split_fasta_record<R>(
+    split: &mut FastxSplitBuffers,
+    record: &R,
+    append_read_number: bool,
+) -> io::Result<()>
+where
+    R: sam::alignment::Record + ?Sized,
+{
+    match fastx_split_target(record)? {
+        FastxSplitTarget::Read1 => {
+            write_fasta_record_with_suffix(&mut split.read1, record, append_read_number)
+        }
+        FastxSplitTarget::Read2 => {
+            write_fasta_record_with_suffix(&mut split.read2, record, append_read_number)
+        }
+        FastxSplitTarget::Singleton => {
+            write_fasta_record_with_suffix(&mut split.singleton, record, append_read_number)
+        }
+    }
+}
+
+fn record_passes_flag_filter<R>(
+    record: &R,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+) -> io::Result<bool>
+where
+    R: sam::alignment::Record + ?Sized,
+{
+    let flag = record.flags()?.bits();
+    Ok(
+        (require_flags == 0 || (flag & require_flags) == require_flags)
+            && (exclude_flags == 0 || (flag & exclude_flags) == 0)
+            && (exclude_all_flags == 0 || (flag & exclude_all_flags) != exclude_all_flags),
+    )
+}
+
 fn write_fasta_record<W, R>(writer: &mut W, record: &R) -> io::Result<()>
 where
     W: Write,
     R: sam::alignment::Record + ?Sized,
 {
+    write_fasta_record_with_suffix(writer, record, false)
+}
+
+fn write_fasta_record_with_suffix<W, R>(
+    writer: &mut W,
+    record: &R,
+    append_read_number: bool,
+) -> io::Result<()>
+where
+    W: Write,
+    R: sam::alignment::Record + ?Sized,
+{
     let name = fastx_record_name(record)?;
+    let name = append_fastx_read_number(name, record, append_read_number)?;
     let sequence = sequence_string(record).unwrap_or_default();
 
     writeln!(writer, ">{name}")?;
@@ -1564,6 +2147,26 @@ where
         .name()
         .map(|name| String::from_utf8_lossy(name).into_owned())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing FASTX record name"))
+}
+
+fn append_fastx_read_number<R>(
+    mut name: String,
+    record: &R,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    R: sam::alignment::Record + ?Sized,
+{
+    if append_read_number {
+        let flags = record.flags()?;
+        if flags.is_first_segment() {
+            name.push_str("/1");
+        } else if flags.is_last_segment() {
+            name.push_str("/2");
+        }
+    }
+
+    Ok(name)
 }
 
 /// Counts SAM records matching an HTSlib-style filter expression.
@@ -2057,7 +2660,7 @@ where
         .iter()
         .map(read_test_pileup_records_from_alignment_path)
         .collect::<io::Result<Vec<_>>>()?;
-    let mut sites: BTreeMap<(String, usize), Vec<(usize, usize, usize)>> = BTreeMap::new();
+    let mut sites: BTreeMap<SynchronizedPileupSite, Vec<SynchronizedPileupEntry>> = BTreeMap::new();
 
     for (input_index, records) in inputs.iter().enumerate() {
         for (record_index, record) in records.iter().enumerate() {
@@ -2269,6 +2872,250 @@ where
     count_bam_records_from_path(src)
 }
 
+/// Reads BAM records from a local file into format-neutral summaries.
+pub fn summarize_bam_records_from_path<P>(src: P) -> io::Result<Vec<AlignmentRecordSummary>>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let header = reader.read_header()?;
+
+    reader
+        .records()
+        .map(|result| result.and_then(|record| summarize_alignment_record(&header, &record)))
+        .collect()
+}
+
+/// Writes a FASTQ view of the first `limit` BAM records.
+pub fn view_bam_as_fastq_text_from_path_with_limit<P>(
+    src: P,
+    limit: Option<usize>,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records().take(limit.unwrap_or(usize::MAX)) {
+        let record = result?;
+        write_fastq_record(&mut writer, &record)?;
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTQ view of the first `limit` BAM records, optionally appending read numbers.
+pub fn view_bam_as_fastq_text_from_path_with_limit_and_suffix<P>(
+    src: P,
+    limit: Option<usize>,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records().take(limit.unwrap_or(usize::MAX)) {
+        let record = result?;
+        write_fastq_record_with_suffix(&mut writer, &record, append_read_number)?;
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTQ view of BAM records passing flag filters.
+pub fn view_bam_as_fastq_text_from_path_with_flag_filter<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_fastq_record(&mut writer, &record)?;
+        }
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTQ view of filtered BAM records, optionally appending read numbers.
+pub fn view_bam_as_fastq_text_from_path_with_flag_filter_and_suffix<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_fastq_record_with_suffix(&mut writer, &record, append_read_number)?;
+        }
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTA view of the first `limit` BAM records.
+pub fn view_bam_as_fasta_text_from_path_with_limit<P>(
+    src: P,
+    limit: Option<usize>,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records().take(limit.unwrap_or(usize::MAX)) {
+        let record = result?;
+        write_fasta_record(&mut writer, &record)?;
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTA view of the first `limit` BAM records, optionally appending read numbers.
+pub fn view_bam_as_fasta_text_from_path_with_limit_and_suffix<P>(
+    src: P,
+    limit: Option<usize>,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records().take(limit.unwrap_or(usize::MAX)) {
+        let record = result?;
+        write_fasta_record_with_suffix(&mut writer, &record, append_read_number)?;
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTA view of BAM records passing flag filters.
+pub fn view_bam_as_fasta_text_from_path_with_flag_filter<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_fasta_record(&mut writer, &record)?;
+        }
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a FASTA view of filtered BAM records, optionally appending read numbers.
+pub fn view_bam_as_fasta_text_from_path_with_flag_filter_and_suffix<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut writer = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_fasta_record_with_suffix(&mut writer, &record, append_read_number)?;
+        }
+    }
+
+    String::from_utf8(writer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes split FASTQ views of BAM records passing flag filters.
+pub fn view_bam_as_fastq_split_text_from_path_with_flag_filter_and_suffix<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<FastxSplitText>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut split = FastxSplitBuffers::default();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_split_fastq_record(&mut split, &record, append_read_number)?;
+        }
+    }
+
+    split.into_text()
+}
+
+/// Writes split FASTA views of BAM records passing flag filters.
+pub fn view_bam_as_fasta_split_text_from_path_with_flag_filter_and_suffix<P>(
+    src: P,
+    require_flags: u16,
+    exclude_flags: u16,
+    exclude_all_flags: u16,
+    append_read_number: bool,
+) -> io::Result<FastxSplitText>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let _header = reader.read_header()?;
+    let mut split = FastxSplitBuffers::default();
+
+    for result in reader.records() {
+        let record = result?;
+        if record_passes_flag_filter(&record, require_flags, exclude_flags, exclude_all_flags)? {
+            write_split_fasta_record(&mut split, &record, append_read_number)?;
+        }
+    }
+
+    split.into_text()
+}
+
 /// Writes BAM input as BAM, including the header and all records.
 pub fn write_bam_from_path<P, W>(src: P, dst: W) -> io::Result<W>
 where
@@ -2284,6 +3131,69 @@ where
     for result in reader.records() {
         let record = result?;
         writer.write_record(&header, &record)?;
+    }
+
+    writer.try_finish()?;
+
+    Ok(writer.into_inner().into_inner())
+}
+
+/// Writes indexed BAM records overlapping the given regions to BAM output.
+///
+/// Records are emitted in request order and duplicates are preserved across
+/// overlapping or repeated regions, matching the behavior needed by
+/// `samtools view -P -b`.
+pub fn write_bam_regions_from_path<P, W>(src: P, regions: &[Region], dst: W) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    W: Write,
+{
+    let index = read_associated_bam_index(&src)?;
+    let data_path = associated_data_path(&src);
+    let mut reader = bam::io::indexed_reader::Builder::default()
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let mut writer = bam::io::Writer::new(dst);
+
+    writer.write_header(&header)?;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query.records() {
+            let record = result?;
+            writer.write_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish()?;
+
+    Ok(writer.into_inner().into_inner())
+}
+
+/// Writes BAM input records with all required flag bits set to BAM output.
+pub fn write_bam_records_with_required_flags_from_path<P, W>(
+    src: P,
+    required_flags: u16,
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    W: Write,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let header = reader.read_header()?;
+    let mut writer = bam::io::Writer::new(dst);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records() {
+        let record = result?;
+        let flags = u16::from(record.flags());
+        if flags & required_flags == required_flags {
+            writer.write_record(&header, &record)?;
+        }
     }
 
     writer.try_finish()?;
@@ -2314,11 +3224,38 @@ where
     P: AsRef<Path>,
     W: Write,
 {
-    use sam::alignment::io::Write as _;
-
     let mut reader = File::open(src)
         .map(BufReader::new)
         .map(sam::io::Reader::new)?;
+    write_bam_from_sam_reader_with_compression_level(&mut reader, dst, compression_level)
+}
+
+/// Writes SAM input as BAM from any buffered reader, including the header and all records.
+pub fn write_bam_from_sam_reader<R, W>(reader: R, dst: W) -> io::Result<W>
+where
+    R: BufRead,
+    W: Write,
+{
+    let mut reader = sam::io::Reader::new(reader);
+    write_bam_from_sam_reader_with_compression_level(
+        &mut reader,
+        dst,
+        bgzf::io::writer::CompressionLevel::default(),
+    )
+}
+
+/// Writes SAM input as BAM from any buffered reader using an explicit BGZF compression level.
+pub fn write_bam_from_sam_reader_with_compression_level<R, W>(
+    reader: &mut sam::io::Reader<R>,
+    dst: W,
+    compression_level: bgzf::io::writer::CompressionLevel,
+) -> io::Result<W>
+where
+    R: BufRead,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
     let header = reader.read_header()?;
     let bgzf_writer = bgzf::io::writer::Builder::default()
         .set_compression_level(compression_level)
@@ -2736,6 +3673,83 @@ where
     Ok(writer.into_inner())
 }
 
+/// Writes indexed CRAM records overlapping the given regions to BAM output.
+pub fn write_cram_regions_as_bam_from_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    regions: &[Region],
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let index = read_associated_cram_index(&src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::indexed_reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let mut writer = bam::io::Writer::new(dst);
+
+    writer.write_header(&header)?;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query {
+            let record = result?;
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish()?;
+
+    Ok(writer.into_inner().into_inner())
+}
+
+/// Writes CRAM records with all required flag bits set to BAM output.
+pub fn write_cram_records_with_required_flags_as_bam_from_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    required_flags: u16,
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let mut writer = bam::io::Writer::new(dst);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records(&header) {
+        let record = result?;
+        let flags = record.flags().bits();
+        if flags & required_flags == required_flags {
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish()?;
+
+    Ok(writer.into_inner().into_inner())
+}
+
 /// Writes CRAM records decoded from a local SAM file using a FASTA reference.
 pub fn write_cram_from_sam_path_with_reference<P, Q, W>(
     src: P,
@@ -3050,7 +4064,8 @@ where
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
-fn read_raw_cram_header_text<P>(src: P) -> io::Result<String>
+/// Reads the embedded raw SAM header text from a local CRAM file.
+pub fn read_raw_cram_header_text<P>(src: P) -> io::Result<String>
 where
     P: AsRef<Path>,
 {
@@ -4527,6 +5542,7 @@ fn alignment_summary_end(record: &AlignmentRecordSummary) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
     use std::path::PathBuf;
 
     use super::{
@@ -4535,6 +5551,8 @@ mod tests {
         query_bam_regions_from_path, read_bam_header_from_path, read_cram_header_from_path,
         read_sam_header_from_path, reference_sequence_count,
         synchronized_pileup_from_alignment_paths,
+        view_sam_as_fastq_split_text_from_reader_with_flag_filter_and_suffix,
+        write_bam_from_sam_reader, write_bam_regions_from_path,
     };
 
     fn fixture(path: &str) -> PathBuf {
@@ -4553,6 +5571,39 @@ mod tests {
 
         assert_eq!(reference_sequence_count(&header), 2);
         assert_eq!(count_sam_records_from_path(path).unwrap(), 8);
+    }
+
+    #[test]
+    fn test_write_bam_from_sam_reader() {
+        let sam = b"@HD\tVN:1.6\nr1\t4\t*\t0\t0\t*\t*\t0\t0\tAC\t!!\n";
+        let bam_data = write_bam_from_sam_reader(Cursor::new(sam), Vec::new()).unwrap();
+        let mut reader = crate::bam::io::Reader::new(Cursor::new(bam_data));
+        let header = reader.read_header().unwrap();
+        assert_eq!(reference_sequence_count(&header), 0);
+        let mut count = 0;
+        for result in reader.records() {
+            result.unwrap();
+            count += 1;
+        }
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_view_sam_as_fastq_split_text_from_reader() {
+        let sam = b"@HD\tVN:1.6\nr1\t77\t*\t0\t0\t*\t*\t0\t0\tAC\t!!\nr1\t141\t*\t0\t0\t*\t*\t0\t0\tTG\t##\n";
+        let mut reader = crate::sam::io::Reader::new(Cursor::new(sam));
+        let split = view_sam_as_fastq_split_text_from_reader_with_flag_filter_and_suffix(
+            &mut reader,
+            0,
+            0,
+            0,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(split.read1, "@r1\nAC\n+\n!!\n");
+        assert_eq!(split.read2, "@r1\nTG\n+\n##\n");
+        assert_eq!(split.singleton, "");
     }
 
     #[test]
@@ -4585,6 +5636,29 @@ mod tests {
             query_bam_regions_from_path(path, &regions).unwrap().len(),
             7
         );
+    }
+
+    #[test]
+    fn test_write_bam_regions_from_path() {
+        let path = fixture("htslib/test/range.bam");
+        let regions = [
+            "CHROMOSOME_II:2980-2980".parse().unwrap(),
+            "CHROMOSOME_IV:1500-1500".parse().unwrap(),
+            "CHROMOSOME_II:2980-2980".parse().unwrap(),
+        ];
+
+        let bam_data = write_bam_regions_from_path(&path, &regions, Vec::new()).unwrap();
+        let mut reader = crate::bam::io::Reader::new(Cursor::new(bam_data));
+        let header = reader.read_header().unwrap();
+        assert!(reference_sequence_count(&header) > 0);
+
+        let mut count = 0;
+        for result in reader.records() {
+            result.unwrap();
+            count += 1;
+        }
+
+        assert_eq!(count, 4);
     }
 
     #[test]
