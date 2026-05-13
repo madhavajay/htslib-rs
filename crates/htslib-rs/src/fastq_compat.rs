@@ -98,14 +98,20 @@ where
 pub struct FastxToSamOptions {
     /// Preserve tab-delimited auxiliary fields from the FASTA/FASTQ definition line.
     pub include_aux: bool,
+    /// Optional auxiliary tag allow-list used when `include_aux` is enabled.
+    pub aux_tags: Option<Vec<String>>,
     /// Parse CASAVA 1.8 read number, filter flag, and barcode fields.
     pub casava: bool,
     /// Auxiliary tag used for CASAVA barcodes.
     pub barcode_tag: Option<String>,
+    /// Auxiliary tag used for barcode qualities.
+    pub barcode_quality_tag: Option<String>,
     /// Use the second whitespace-delimited definition token as the read name when present.
     pub name2: bool,
     /// Extract an inline UMI barcode into this auxiliary tag.
     pub umi_tag: Option<String>,
+    /// Attach this read group ID as an `RG:Z` auxiliary tag.
+    pub read_group_id: Option<String>,
 }
 
 /// Options for converting SAM records to FASTA/FASTQ.
@@ -135,6 +141,142 @@ where
 {
     for record in read_fastq_records(reader)? {
         write_fastx_sam_record(writer, &record, options)?;
+    }
+
+    Ok(())
+}
+
+/// Converts paired FASTQ records to SAM text.
+pub fn write_sam_from_paired_fastq<R1, R2, W>(
+    read1: R1,
+    read2: R2,
+    writer: &mut W,
+    options: &FastxToSamOptions,
+) -> io::Result<()>
+where
+    R1: BufRead,
+    R2: BufRead,
+    W: Write,
+{
+    let read1_records = read_fastq_records(read1)?;
+    let read2_records = read_fastq_records(read2)?;
+
+    if read1_records.len() != read2_records.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "paired FASTQ inputs have different record counts",
+        ));
+    }
+
+    for (mut r1, mut r2) in read1_records.into_iter().zip(read2_records) {
+        ensure_read_number(&mut r1.definition, 1);
+        ensure_read_number(&mut r2.definition, 2);
+        write_fastx_sam_record(writer, &r1, options)?;
+        write_fastx_sam_record(writer, &r2, options)?;
+    }
+
+    Ok(())
+}
+
+/// Converts paired FASTQ records with optional index FASTQ records to SAM text.
+pub fn write_sam_from_paired_fastq_with_indexes<R1, R2, I1, I2, W>(
+    read1: R1,
+    read2: R2,
+    index1: Option<I1>,
+    index2: Option<I2>,
+    writer: &mut W,
+    options: &FastxToSamOptions,
+    index_on_both_reads: bool,
+) -> io::Result<()>
+where
+    R1: BufRead,
+    R2: BufRead,
+    I1: BufRead,
+    I2: BufRead,
+    W: Write,
+{
+    let read1_records = read_fastq_records(read1)?;
+    let read2_records = read_fastq_records(read2)?;
+    let index1_records = index1.map(read_fastq_records).transpose()?;
+    let index2_records = index2.map(read_fastq_records).transpose()?;
+
+    let read_count = read1_records.len();
+    if read_count != read2_records.len()
+        || index1_records
+            .as_ref()
+            .is_some_and(|records| records.len() != read_count)
+        || index2_records
+            .as_ref()
+            .is_some_and(|records| records.len() != read_count)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "input FASTQ files have different record counts",
+        ));
+    }
+
+    for i in 0..read_count {
+        let mut r1 = read1_records[i].clone();
+        let mut r2 = read2_records[i].clone();
+        ensure_read_number(&mut r1.definition, 1);
+        ensure_read_number(&mut r2.definition, 2);
+
+        let index_aux = index_aux_fields(
+            index1_records.as_ref().and_then(|records| records.get(i)),
+            index2_records.as_ref().and_then(|records| records.get(i)),
+            options,
+        );
+
+        write_fastx_sam_record_with_extra_aux(writer, &r1, options, &index_aux)?;
+        if index_on_both_reads {
+            write_fastx_sam_record_with_extra_aux(writer, &r2, options, &index_aux)?;
+        } else {
+            write_fastx_sam_record(writer, &r2, options)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Converts FASTQ records with optional index FASTQ records to SAM text.
+pub fn write_sam_from_fastq_with_indexes<R, I1, I2, W>(
+    reader: R,
+    index1: Option<I1>,
+    index2: Option<I2>,
+    writer: &mut W,
+    options: &FastxToSamOptions,
+) -> io::Result<()>
+where
+    R: BufRead,
+    I1: BufRead,
+    I2: BufRead,
+    W: Write,
+{
+    let records = read_fastq_records(reader)?;
+    let index1_records = index1.map(read_fastq_records).transpose()?;
+    let index2_records = index2.map(read_fastq_records).transpose()?;
+
+    let read_count = records.len();
+    if index1_records
+        .as_ref()
+        .is_some_and(|records| records.len() != read_count)
+        || index2_records
+            .as_ref()
+            .is_some_and(|records| records.len() != read_count)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "input FASTQ files have different record counts",
+        ));
+    }
+
+    for (i, record) in records.iter().enumerate() {
+        let index_aux = index_aux_fields(
+            index1_records.as_ref().and_then(|records| records.get(i)),
+            index2_records.as_ref().and_then(|records| records.get(i)),
+            options,
+        );
+        write_fastx_sam_record_with_extra_aux(writer, record, options, &index_aux)?;
     }
 
     Ok(())
@@ -357,6 +499,18 @@ fn write_fastx_sam_record<W>(
 where
     W: Write,
 {
+    write_fastx_sam_record_with_extra_aux(writer, record, options, &[])
+}
+
+fn write_fastx_sam_record_with_extra_aux<W>(
+    writer: &mut W,
+    record: &FastxRecord,
+    options: &FastxToSamOptions,
+    extra_aux: &[String],
+) -> io::Result<()>
+where
+    W: Write,
+{
     let ParsedDefinition {
         name,
         read_number,
@@ -383,6 +537,14 @@ where
 
     for field in aux {
         write!(writer, "\t{field}")?;
+    }
+
+    for field in extra_aux {
+        write!(writer, "\t{field}")?;
+    }
+
+    if let Some(read_group_id) = options.read_group_id.as_deref() {
+        write!(writer, "\tRG:Z:{read_group_id}")?;
     }
 
     writeln!(writer)
@@ -413,12 +575,7 @@ fn parse_definition(definition: &str, options: &FastxToSamOptions) -> ParsedDefi
     let mut casava_read_number = None;
     let mut filtered = false;
     let mut aux = if options.include_aux {
-        tokens
-            .iter()
-            .skip(1)
-            .filter(|field| field.matches(':').count() >= 2)
-            .map(|field| (*field).to_string())
-            .collect()
+        fastx_aux_fields(&tokens, options)
     } else {
         Vec::new()
     };
@@ -448,6 +605,56 @@ fn parse_definition(definition: &str, options: &FastxToSamOptions) -> ParsedDefi
         read_number: read_number.or(casava_read_number),
         filtered,
         aux,
+    }
+}
+
+fn fastx_aux_fields(tokens: &[&str], options: &FastxToSamOptions) -> Vec<String> {
+    tokens
+        .iter()
+        .skip(1)
+        .filter(|field| field.matches(':').count() >= 2)
+        .filter(|field| {
+            let tag = field.get(..2);
+            let has_tag_separator = field.as_bytes().get(2) == Some(&b':');
+            match (tag, has_tag_separator, options.aux_tags.as_ref()) {
+                (Some(tag), true, Some(tags)) => tags.iter().any(|wanted| wanted == tag),
+                (_, _, Some(_)) => false,
+                _ => true,
+            }
+        })
+        .map(|field| normalize_aux_field(field))
+        .collect()
+}
+
+fn normalize_aux_field(field: &str) -> String {
+    let mut parts = field.splitn(3, ':');
+    let Some(tag) = parts.next() else {
+        return field.to_string();
+    };
+    let Some(kind) = parts.next() else {
+        return field.to_string();
+    };
+    let Some(value) = parts.next() else {
+        return field.to_string();
+    };
+
+    if kind == "f" {
+        return format!("{tag}:{kind}:{}", normalize_float_exponent(value));
+    }
+
+    field.to_string()
+}
+
+fn normalize_float_exponent(value: &str) -> String {
+    let Some(e_pos) = value.find(['e', 'E']) else {
+        return value.to_string();
+    };
+    let mantissa = &value[..=e_pos];
+    let exponent = &value[e_pos + 1..];
+    if exponent.starts_with(['+', '-']) {
+        value.to_string()
+    } else {
+        format!("{mantissa}+{exponent}")
     }
 }
 
@@ -484,6 +691,45 @@ fn barcode_tag(tag: Option<&str>) -> Option<&str> {
     }
 }
 
+fn barcode_quality_tag(tag: Option<&str>) -> Option<&str> {
+    match tag {
+        Some(tag) if tag.len() == 2 => Some(tag),
+        Some(_) => None,
+        None => Some("QT"),
+    }
+}
+
+fn index_aux_fields(
+    index1: Option<&FastxRecord>,
+    index2: Option<&FastxRecord>,
+    options: &FastxToSamOptions,
+) -> Vec<String> {
+    let indexes = [index1, index2].into_iter().flatten().collect::<Vec<_>>();
+    if indexes.is_empty() {
+        return Vec::new();
+    }
+
+    let sequence = indexes
+        .iter()
+        .map(|record| record.sequence.as_str())
+        .collect::<Vec<_>>()
+        .join("-");
+    let quality = indexes
+        .iter()
+        .map(|record| record.quality.as_deref().unwrap_or("*"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut aux = Vec::new();
+    if let Some(tag) = barcode_tag(options.barcode_tag.as_deref()) {
+        aux.push(format!("{tag}:Z:{sequence}"));
+    }
+    if let Some(tag) = barcode_quality_tag(options.barcode_quality_tag.as_deref()) {
+        aux.push(format!("{tag}:Z:{quality}"));
+    }
+    aux
+}
+
 fn strip_read_number(name: &mut String) -> Option<u8> {
     match name.as_bytes() {
         bytes if bytes.ends_with(b"/1") => {
@@ -496,6 +742,22 @@ fn strip_read_number(name: &mut String) -> Option<u8> {
         }
         _ => None,
     }
+}
+
+fn ensure_read_number(definition: &mut String, read_number: u8) {
+    let mut tokens = definition.splitn(2, char::is_whitespace);
+    let mut name = tokens.next().unwrap_or("").to_string();
+    let rest = tokens.next();
+
+    strip_read_number(&mut name);
+    name.push('/');
+    name.push(char::from(b'0' + read_number));
+
+    *definition = if let Some(rest) = rest {
+        format!("{name} {rest}")
+    } else {
+        name
+    };
 }
 
 fn extract_umi(name: &str) -> Option<(String, String)> {
@@ -652,6 +914,8 @@ mod tests {
         FastxToSamOptions, SamToFastxOptions, build_index, fetch_sequence_and_quality,
         has_sequence, line_length, read_index, sequence_len, sequence_name, write_fasta_from_sam,
         write_fastq_from_sam, write_sam_from_fasta, write_sam_from_fastq,
+        write_sam_from_fastq_with_indexes, write_sam_from_paired_fastq,
+        write_sam_from_paired_fastq_with_indexes,
     };
 
     const MINIMAL_FASTQ: &[u8] = include_bytes!("../../../htslib/test/fastq/minimal.fq");
@@ -728,6 +992,137 @@ mod tests {
         .unwrap();
 
         assert_eq!(out, b"x\t4\t*\t0\t0\t*\t*\t0\t0\tA\t*\n");
+    }
+
+    #[test]
+    fn test_write_sam_from_fastq_with_aux_tag_filter() {
+        let mut out = Vec::new();
+        let options = FastxToSamOptions {
+            include_aux: true,
+            aux_tags: Some(vec![String::from("XZ"), String::from("AA")]),
+            ..Default::default()
+        };
+
+        write_sam_from_fastq(
+            Cursor::new(b"@x\tXX:i:10\tXZ:i:20\tAA:Z:ok\nA\n+\n+\n"),
+            &mut out,
+            &options,
+        )
+        .unwrap();
+
+        assert_eq!(out, b"x\t4\t*\t0\t0\t*\t*\t0\t0\tA\t+\tXZ:i:20\tAA:Z:ok\n");
+    }
+
+    #[test]
+    fn test_write_sam_from_fastq_normalizes_float_aux_exponent() {
+        let mut out = Vec::new();
+        let options = FastxToSamOptions {
+            include_aux: true,
+            ..Default::default()
+        };
+
+        write_sam_from_fastq(
+            Cursor::new(b"@x\tFF:f:-1e20\nA\n+\n+\n"),
+            &mut out,
+            &options,
+        )
+        .unwrap();
+
+        assert_eq!(out, b"x\t4\t*\t0\t0\t*\t*\t0\t0\tA\t+\tFF:f:-1e+20\n");
+    }
+
+    #[test]
+    fn test_write_sam_from_fastq_with_read_group() {
+        let mut out = Vec::new();
+        let options = FastxToSamOptions {
+            read_group_id: Some(String::from("rg1")),
+            ..Default::default()
+        };
+
+        write_sam_from_fastq(Cursor::new(MINIMAL_FASTQ), &mut out, &options).unwrap();
+
+        assert_eq!(out, b"x\t4\t*\t0\t0\t*\t*\t0\t0\tA\t+\tRG:Z:rg1\n");
+    }
+
+    #[test]
+    fn test_write_sam_from_paired_fastq() {
+        let mut out = Vec::new();
+        write_sam_from_paired_fastq(
+            Cursor::new(b"@x\nA\n+\n+\n"),
+            Cursor::new(b"@x\nT\n+\n-\n"),
+            &mut out,
+            &FastxToSamOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            out,
+            b"x\t77\t*\t0\t0\t*\t*\t0\t0\tA\t+\nx\t141\t*\t0\t0\t*\t*\t0\t0\tT\t-\n"
+        );
+    }
+
+    #[test]
+    fn test_write_sam_from_paired_fastq_with_indexes() {
+        let mut out = Vec::new();
+        write_sam_from_paired_fastq_with_indexes(
+            Cursor::new(b"@x\nA\n+\n+\n"),
+            Cursor::new(b"@x\nT\n+\n-\n"),
+            Some(Cursor::new(b"@x\nCG\n+\n12\n")),
+            Some(Cursor::new(b"@x\nTA\n+\n34\n")),
+            &mut out,
+            &FastxToSamOptions::default(),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            out,
+            b"x\t77\t*\t0\t0\t*\t*\t0\t0\tA\t+\tBC:Z:CG-TA\tQT:Z:12 34\nx\t141\t*\t0\t0\t*\t*\t0\t0\tT\t-\n"
+        );
+    }
+
+    #[test]
+    fn test_write_sam_from_paired_fastq_with_custom_index_tags_on_both_reads() {
+        let mut out = Vec::new();
+        let options = FastxToSamOptions {
+            barcode_tag: Some(String::from("OX")),
+            barcode_quality_tag: Some(String::from("BZ")),
+            ..Default::default()
+        };
+
+        write_sam_from_paired_fastq_with_indexes(
+            Cursor::new(b"@x\nA\n+\n+\n"),
+            Cursor::new(b"@x\nT\n+\n-\n"),
+            Some(Cursor::new(b"@x\nCG\n+\n12\n")),
+            None::<Cursor<&[u8]>>,
+            &mut out,
+            &options,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            out,
+            b"x\t77\t*\t0\t0\t*\t*\t0\t0\tA\t+\tOX:Z:CG\tBZ:Z:12\nx\t141\t*\t0\t0\t*\t*\t0\t0\tT\t-\tOX:Z:CG\tBZ:Z:12\n"
+        );
+    }
+
+    #[test]
+    fn test_write_sam_from_fastq_with_indexes() {
+        let mut out = Vec::new();
+        write_sam_from_fastq_with_indexes(
+            Cursor::new(b"@x/1\nA\n+\n+\n@y/2\nT\n+\n-\n"),
+            Some(Cursor::new(b"@x\nCG\n+\n12\n@y\nTA\n+\n34\n")),
+            None::<Cursor<&[u8]>>,
+            &mut out,
+            &FastxToSamOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            out,
+            b"x\t77\t*\t0\t0\t*\t*\t0\t0\tA\t+\tBC:Z:CG\tQT:Z:12\ny\t141\t*\t0\t0\t*\t*\t0\t0\tT\t-\tBC:Z:TA\tQT:Z:34\n"
+        );
     }
 
     #[test]
