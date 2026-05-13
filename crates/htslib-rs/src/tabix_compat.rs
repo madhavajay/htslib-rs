@@ -162,6 +162,144 @@ fn csi_max_position(min_shift: u8, depth: u8) -> u128 {
     1_u128 << bit_count
 }
 
+/// Builds a TBI index for an existing BGZF-compressed text file.
+///
+/// Unlike [`build_bgzf_and_index`], this does not re-encode the BGZF stream:
+/// it walks the existing file, tracking [`bgzf::io::Reader::virtual_position`]
+/// at line boundaries, so the produced index references the input file's
+/// actual virtual offsets and can be used immediately without rewriting the
+/// data.
+///
+/// # HTSlib analogue
+///
+/// Direct analogue of HTSlib's `tbx_index_build3(fname, fnidx, 0, 0, conf)`
+/// — the `min_shift = 0` case selects TBI. The C version keeps the original
+/// file untouched and emits only the index; this function does the same.
+///
+/// # Upstream consumers
+///
+/// - **bcftools-rs** uses this from `bcftools_rs::commands::index` for
+///   `bcftools index -t in.vcf.gz` (mirrors upstream `bcftools/vcfindex.c:329`
+///   `bcf_index_build3` for the VCF case).
+///
+/// # Implementation
+///
+/// Backed by `noodles_bgzf::io::Reader` for BGZF I/O and `noodles_tabix`'s
+/// indexer for index assembly. Field-extraction logic for VCF/BED/GFF lines
+/// is shared with [`build_bgzf_and_index`].
+pub fn build_tbi_from_bgzf_path<P>(src: P, format: TextFormat) -> io::Result<tabix::Index>
+where
+    P: AsRef<Path>,
+{
+    let file = File::open(src)?;
+    let mut reader = bgzf::io::Reader::new(file);
+    let mut indexer = tabix::index::Indexer::default();
+    indexer.set_header(format.header_builder().build());
+
+    let mut line = String::new();
+    let mut start_position = reader.virtual_position();
+
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            break;
+        }
+        let end_position = reader.virtual_position();
+
+        if let Some((reference_sequence_name, start, end)) = parse_index_fields(format, &line)? {
+            let chunk = csi::binning_index::index::reference_sequence::bin::Chunk::new(
+                start_position,
+                end_position,
+            );
+            indexer.add_record(reference_sequence_name, start, end, chunk)?;
+        }
+
+        start_position = end_position;
+    }
+
+    Ok(indexer.build())
+}
+
+/// Builds a CSI index for an existing BGZF-compressed text file using the
+/// default CSI `min_shift` of 14.
+///
+/// See [`build_tbi_from_bgzf_path`] for the difference vs the re-encoding
+/// builders. HTSlib analogue: `tbx_index_build3(fname, fnidx, 14, 0, conf)`.
+///
+/// # Upstream consumers
+///
+/// - **bcftools-rs** uses this for `bcftools index -c in.vcf.gz` (the
+///   default for VCF.gz), via `bcftools_rs::commands::index`.
+pub fn build_csi_from_bgzf_path<P>(src: P, format: TextFormat) -> io::Result<csi::Index>
+where
+    P: AsRef<Path>,
+{
+    build_csi_from_bgzf_path_with_min_shift(src, format, 14)
+}
+
+/// Builds a CSI index for an existing BGZF-compressed text file with a custom
+/// `min_shift`. HTSlib analogue: `tbx_index_build3(fname, fnidx, min_shift,
+/// 0, conf)`.
+pub fn build_csi_from_bgzf_path_with_min_shift<P>(
+    src: P,
+    format: TextFormat,
+    min_shift: u8,
+) -> io::Result<csi::Index>
+where
+    P: AsRef<Path>,
+{
+    use csi::binning_index::{
+        Indexer,
+        index::{
+            header::ReferenceSequenceNames, reference_sequence::bin::Chunk,
+            reference_sequence::index::BinnedIndex,
+        },
+    };
+
+    let file = File::open(src)?;
+    let mut reader = bgzf::io::Reader::new(file);
+    let mut reference_sequence_names = ReferenceSequenceNames::new();
+    let mut records = Vec::new();
+    let mut max_position = 0;
+    let mut line = String::new();
+    let mut start_position = reader.virtual_position();
+
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            break;
+        }
+        let end_position = reader.virtual_position();
+
+        if let Some((reference_sequence_name, start, end)) = parse_index_fields(format, &line)? {
+            let (reference_sequence_id, _) =
+                reference_sequence_names.insert_full(reference_sequence_name.into());
+            let chunk = Chunk::new(start_position, end_position);
+            max_position = max_position.max(usize::from(end));
+            records.push((reference_sequence_id, start, end, chunk));
+        }
+
+        start_position = end_position;
+    }
+
+    let mut indexer =
+        Indexer::<BinnedIndex>::new(min_shift, csi_depth_for_position(min_shift, max_position));
+
+    for (reference_sequence_id, start, end, chunk) in records {
+        indexer.add_record(Some((reference_sequence_id, start, end, true)), chunk)?;
+    }
+
+    let header = format
+        .header_builder()
+        .set_reference_sequence_names(reference_sequence_names.clone())
+        .build();
+    Ok(indexer
+        .set_header(header)
+        .build(reference_sequence_names.len()))
+}
+
 /// Writes a BGZF-compressed BED stream and a matching TBI index to local files.
 pub fn write_bed_bgzf_and_index<R, P, Q>(reader: R, bgzf_dst: P, tbi_dst: Q) -> io::Result<()>
 where
@@ -422,9 +560,12 @@ fn parse_position(s: &str, addend: usize) -> io::Result<Position> {
 mod tests {
     use std::io::Cursor;
 
+    use crate::csi::BinningIndex as _;
+
     use super::{
         TextFormat, build_bed_bgzf_and_index, build_bgzf_and_csi, build_bgzf_and_index,
-        query_csi_records_from_path, query_records_from_path,
+        build_csi_from_bgzf_path, build_csi_from_bgzf_path_with_min_shift,
+        build_tbi_from_bgzf_path, query_csi_records_from_path, query_records_from_path,
     };
 
     #[test]
@@ -493,5 +634,90 @@ mod tests {
         std::fs::remove_file(path).unwrap();
 
         assert_eq!(records, ["sq0\t21\t.\tA\tG\t.\t.\t."]);
+    }
+
+    /// Helper: write `data` as a BGZF stream by encoding once with the
+    /// re-encoding builder and dropping the index. Returns the bgzf bytes.
+    fn bgzf_encode_vcf(data: &[u8]) -> Vec<u8> {
+        let (encoded, _) =
+            build_bgzf_and_index(Cursor::new(data), Vec::new(), TextFormat::Vcf).unwrap();
+        encoded
+    }
+
+    fn temp_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "htslib-rs-tabix-existing-{}-{label}.vcf.gz",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn build_tbi_from_existing_bgzf_indexes_real_offsets() {
+        // Encode once, then build a TBI for the on-disk file (no re-encoding).
+        let data = b"##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nsq0\t8\t.\tA\tC\t.\t.\t.\nsq0\t21\t.\tA\tG\t.\t.\t.\nsq1\t5\t.\tT\tG\t.\t.\t.\n";
+        let bgzf = bgzf_encode_vcf(data);
+        let path = temp_path("tbi");
+        std::fs::write(&path, &bgzf).unwrap();
+
+        let index = build_tbi_from_bgzf_path(&path, TextFormat::Vcf).unwrap();
+
+        // The index must round-trip a region query against the actual file.
+        let region = "sq0:8-8".parse().unwrap();
+        let records = query_records_from_path(&path, index, &region).unwrap();
+
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(records, ["sq0\t8\t.\tA\tC\t.\t.\t."]);
+    }
+
+    #[test]
+    fn build_csi_from_existing_bgzf_indexes_real_offsets() {
+        let data = b"##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nsq0\t8\t.\tA\tC\t.\t.\t.\nsq0\t21\t.\tA\tG\t.\t.\t.\nsq1\t5\t.\tT\tG\t.\t.\t.\n";
+        let bgzf = bgzf_encode_vcf(data);
+        let path = temp_path("csi");
+        std::fs::write(&path, &bgzf).unwrap();
+
+        let index = build_csi_from_bgzf_path(&path, TextFormat::Vcf).unwrap();
+
+        let region = "sq1:5-5".parse().unwrap();
+        let records = query_csi_records_from_path(&path, index, &region).unwrap();
+
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(records, ["sq1\t5\t.\tT\tG\t.\t.\t."]);
+    }
+
+    #[test]
+    fn build_csi_from_existing_bgzf_with_custom_min_shift() {
+        let data = b"##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nsq0\t10\t.\tA\tC\t.\t.\t.\n";
+        let bgzf = bgzf_encode_vcf(data);
+        let path = temp_path("csi-min-shift");
+        std::fs::write(&path, &bgzf).unwrap();
+
+        let index = build_csi_from_bgzf_path_with_min_shift(&path, TextFormat::Vcf, 12).unwrap();
+        assert_eq!(index.min_shift(), 12);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn existing_bgzf_index_uses_input_virtual_offsets_not_re_encoded() {
+        // The point of these helpers is that they DO NOT rewrite the data —
+        // queries against the on-disk file using the produced index must
+        // succeed even if the bytes are not what a re-encoder would emit.
+        // We assert this indirectly: the file's checksum/length is unchanged
+        // before and after indexing.
+        let data = b"##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nsq0\t1\t.\tA\tC\t.\t.\t.\nsq0\t2\t.\tA\tG\t.\t.\t.\n";
+        let bgzf = bgzf_encode_vcf(data);
+        let path = temp_path("immutability");
+        std::fs::write(&path, &bgzf).unwrap();
+
+        let before = std::fs::read(&path).unwrap();
+        let _ = build_csi_from_bgzf_path(&path, TextFormat::Vcf).unwrap();
+        let after = std::fs::read(&path).unwrap();
+
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(before, after);
     }
 }

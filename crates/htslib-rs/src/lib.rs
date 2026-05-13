@@ -12,6 +12,7 @@ pub mod expr;
 pub mod faidx_compat;
 pub mod fastq_compat;
 pub mod format;
+pub mod header_compat;
 pub mod hfile_compat;
 pub mod hts_defs;
 pub mod hts_os;
