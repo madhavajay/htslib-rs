@@ -359,6 +359,40 @@ where
     )
 }
 
+/// Builds a CSI index for an existing BGZF-compressed VCF file using the
+/// default CSI `min_shift` of 14.
+///
+/// Walks the existing file's BGZF virtual offsets — does not rewrite the
+/// data. Equivalent to `bcftools index -c file.vcf.gz`.
+pub fn build_vcf_csi_from_path<P>(src: P) -> io::Result<CsiIndex>
+where
+    P: AsRef<Path>,
+{
+    tabix_compat::build_csi_from_bgzf_path(src, tabix_compat::TextFormat::Vcf)
+}
+
+/// Builds a CSI index for an existing BGZF-compressed VCF file with a custom
+/// `min_shift`.
+pub fn build_vcf_csi_from_path_with_min_shift<P>(src: P, min_shift: u8) -> io::Result<CsiIndex>
+where
+    P: AsRef<Path>,
+{
+    tabix_compat::build_csi_from_bgzf_path_with_min_shift(
+        src,
+        tabix_compat::TextFormat::Vcf,
+        min_shift,
+    )
+}
+
+/// Builds a TBI index for an existing BGZF-compressed VCF file. Equivalent to
+/// `bcftools index -t file.vcf.gz` (or `tabix -p vcf file.vcf.gz`).
+pub fn build_vcf_tbi_from_path<P>(src: P) -> io::Result<TbiIndex>
+where
+    P: AsRef<Path>,
+{
+    tabix_compat::build_tbi_from_bgzf_path(src, tabix_compat::TextFormat::Vcf)
+}
+
 /// Builds a CSI index for a local BCF file.
 pub fn build_bcf_csi<P>(src: P) -> io::Result<CsiIndex>
 where
