@@ -2174,9 +2174,17 @@ pub fn count_sam_records_matching_filter_from_path<P>(src: P, filter: &str) -> i
 where
     P: AsRef<Path>,
 {
-    let mut reader = File::open(src)
+    File::open(src)
         .map(BufReader::new)
-        .map(sam::io::Reader::new)?;
+        .and_then(|reader| count_sam_records_matching_filter(reader, filter))
+}
+
+/// Counts SAM records from a buffered reader matching an HTSlib-style filter expression.
+pub fn count_sam_records_matching_filter<R>(reader: R, filter: &str) -> io::Result<usize>
+where
+    R: BufRead,
+{
+    let mut reader = sam::io::Reader::new(reader);
     let header = reader.read_header()?;
     let filter = Filter::new(filter);
     let mut count = 0;
@@ -2196,14 +2204,118 @@ where
     Ok(count)
 }
 
+/// Counts BAM records matching an HTSlib-style filter expression.
+pub fn count_bam_records_matching_filter_from_path<P>(src: P, filter: &str) -> io::Result<usize>
+where
+    P: AsRef<Path>,
+{
+    let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| count_bam_records_matching_filter(reader, filter))
+}
+
+/// Counts BAM records from a reader matching an HTSlib-style filter expression.
+pub fn count_bam_records_matching_filter<R>(reader: R, filter: &str) -> io::Result<usize>
+where
+    R: Read,
+{
+    let mut reader = bam::io::Reader::new(reader);
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut count = 0;
+
+    for result in reader.records() {
+        let record = result?;
+
+        if record_matches_filter(&header, &record, &filter)? {
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
+/// Counts CRAM records matching an HTSlib-style filter expression using a FASTA reference.
+pub fn count_cram_records_matching_filter_from_path_with_reference<P, Q>(
+    src: P,
+    reference_src: Q,
+    filter: &str,
+) -> io::Result<usize>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| {
+        count_cram_records_matching_filter_with_reference_repository(
+            reader,
+            reference_sequence_repository,
+            filter,
+        )
+    })
+}
+
+/// Counts CRAM records from a reader matching an HTSlib-style filter expression.
+pub fn count_cram_records_matching_filter_with_reference<R, Q>(
+    reader: R,
+    reference_src: Q,
+    filter: &str,
+) -> io::Result<usize>
+where
+    R: Read,
+    Q: AsRef<Path>,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    count_cram_records_matching_filter_with_reference_repository(
+        reader,
+        reference_sequence_repository,
+        filter,
+    )
+}
+
+fn count_cram_records_matching_filter_with_reference_repository<R>(
+    reader: R,
+    reference_sequence_repository: fasta::Repository,
+    filter: &str,
+) -> io::Result<usize>
+where
+    R: Read,
+{
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(reference_sequence_repository)
+        .build_from_reader(reader);
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut count = 0;
+
+    for result in reader.records(&header) {
+        let record = result?;
+
+        if record_matches_filter(&header, &record, &filter)? {
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
 /// Writes SAM records matching an HTSlib-style filter expression, including the header.
 pub fn view_sam_text_matching_filter_from_path<P>(src: P, filter: &str) -> io::Result<String>
 where
     P: AsRef<Path>,
 {
-    let mut reader = File::open(src)
+    File::open(src)
         .map(BufReader::new)
-        .map(sam::io::Reader::new)?;
+        .and_then(|reader| view_sam_text_matching_filter(reader, filter))
+}
+
+/// Writes SAM records from a buffered reader matching an HTSlib-style filter expression.
+pub fn view_sam_text_matching_filter<R>(reader: R, filter: &str) -> io::Result<String>
+where
+    R: BufRead,
+{
+    let mut reader = sam::io::Reader::new(reader);
     let header = reader.read_header()?;
     let filter = Filter::new(filter);
     let mut writer = sam::io::Writer::new(Vec::new());
@@ -2212,18 +2324,132 @@ where
 
     for result in reader.records() {
         let record = result?;
-        let context = SamFilterContext::new(&header, &record)?;
-        let value = filter
-            .eval_with(|symbol| context.lookup(symbol))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
-        if value.truth() {
+        if record_matches_filter(&header, &record, &filter)? {
             writer.write_record(&header, &record)?;
         }
     }
 
     String::from_utf8(writer.into_inner())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes BAM records matching an HTSlib-style filter expression as SAM text, including the header.
+pub fn view_bam_as_sam_text_matching_filter_from_path<P>(src: P, filter: &str) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| view_bam_as_sam_text_matching_filter(reader, filter))
+}
+
+/// Writes BAM records from a reader matching an HTSlib-style filter expression as SAM text.
+pub fn view_bam_as_sam_text_matching_filter<R>(reader: R, filter: &str) -> io::Result<String>
+where
+    R: Read,
+{
+    use sam::alignment::io::Write as _;
+
+    let mut reader = bam::io::Reader::new(reader);
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = sam::io::Writer::new(Vec::new());
+
+    writer.write_header(&header)?;
+
+    for result in reader.records() {
+        let record = result?;
+
+        if record_matches_filter(&header, &record, &filter)? {
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    String::from_utf8(writer.into_inner())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes CRAM records matching an HTSlib-style filter expression as SAM text, including the header.
+pub fn view_cram_as_sam_text_matching_filter_from_path_with_reference<P, Q>(
+    src: P,
+    reference_src: Q,
+    filter: &str,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| {
+        view_cram_as_sam_text_matching_filter_with_reference_repository(
+            reader,
+            reference_sequence_repository,
+            filter,
+        )
+    })
+}
+
+/// Writes CRAM records from a reader matching a filter expression as SAM text.
+pub fn view_cram_as_sam_text_matching_filter_with_reference<R, Q>(
+    reader: R,
+    reference_src: Q,
+    filter: &str,
+) -> io::Result<String>
+where
+    R: Read,
+    Q: AsRef<Path>,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    view_cram_as_sam_text_matching_filter_with_reference_repository(
+        reader,
+        reference_sequence_repository,
+        filter,
+    )
+}
+
+fn view_cram_as_sam_text_matching_filter_with_reference_repository<R>(
+    reader: R,
+    reference_sequence_repository: fasta::Repository,
+    filter: &str,
+) -> io::Result<String>
+where
+    R: Read,
+{
+    use sam::alignment::io::Write as _;
+
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(reference_sequence_repository)
+        .build_from_reader(reader);
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = sam::io::Writer::new(Vec::new());
+
+    writer.write_header(&header)?;
+
+    for result in reader.records(&header) {
+        let record = result?;
+
+        if record_matches_filter(&header, &record, &filter)? {
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    String::from_utf8(writer.into_inner())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+fn record_matches_filter<R>(header: &Header, record: &R, filter: &Filter) -> io::Result<bool>
+where
+    R: sam::alignment::Record + ?Sized,
+{
+    let context = SamFilterContext::new(header, record)?;
+    let value = filter
+        .eval_with(|symbol| context.lookup(symbol))
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+
+    Ok(value.truth())
 }
 
 struct SamFilterContext {
@@ -3122,7 +3348,16 @@ where
     P: AsRef<Path>,
     W: Write,
 {
-    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    File::open(src).and_then(|reader| write_bam(reader, dst))
+}
+
+/// Writes BAM input from a reader as BAM, including the header and all records.
+pub fn write_bam<R, W>(reader: R, dst: W) -> io::Result<W>
+where
+    R: Read,
+    W: Write,
+{
+    let mut reader = bam::io::Reader::new(reader);
     let header = reader.read_header()?;
     let mut writer = bam::io::Writer::new(dst);
 
@@ -3136,6 +3371,278 @@ where
     writer.try_finish()?;
 
     Ok(writer.into_inner().into_inner())
+}
+
+/// Writes BAM input records matching an HTSlib-style filter expression to BAM output.
+pub fn write_bam_matching_filter_from_path<P, W>(src: P, filter: &str, dst: W) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    W: Write,
+{
+    let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| write_bam_matching_filter(reader, filter, dst))
+}
+
+/// Writes BAM records from a reader matching an HTSlib-style filter expression to BAM output.
+pub fn write_bam_matching_filter<R, W>(reader: R, filter: &str, dst: W) -> io::Result<W>
+where
+    R: Read,
+    W: Write,
+{
+    let mut reader = bam::io::Reader::new(reader);
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = bam::io::Writer::new(dst);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records() {
+        let record = result?;
+
+        if record_matches_filter(&header, &record, &filter)? {
+            writer.write_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish()?;
+
+    Ok(writer.into_inner().into_inner())
+}
+
+/// Writes BAM input as CRAM using a FASTA reference.
+pub fn write_cram_from_bam_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    writer: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    File::open(src).and_then(|reader| {
+        write_cram_from_bam_reader_with_reference_repository(
+            reader,
+            reference_sequence_repository,
+            writer,
+        )
+    })
+}
+
+/// Writes BAM input from a reader as CRAM using a FASTA reference.
+pub fn write_cram_from_bam_reader_with_reference<R, Q, W>(
+    reader: R,
+    reference_src: Q,
+    writer: W,
+) -> io::Result<W>
+where
+    R: Read,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_from_bam_reader_with_reference_repository(
+        reader,
+        reference_sequence_repository,
+        writer,
+    )
+}
+
+fn write_cram_from_bam_reader_with_reference_repository<R, W>(
+    reader: R,
+    reference_sequence_repository: fasta::Repository,
+    writer: W,
+) -> io::Result<W>
+where
+    R: Read,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let mut reader = bam::io::Reader::new(reader);
+    let header = reader.read_header()?;
+    let mut writer = cram::io::writer::Builder::default()
+        .set_reference_sequence_repository(reference_sequence_repository)
+        .build_from_writer(writer);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records() {
+        let record = result?;
+        writer.write_alignment_record(&header, &record)?;
+    }
+
+    writer.try_finish(&header)?;
+
+    Ok(writer.into_inner())
+}
+
+/// Writes BAM input records matching an HTSlib-style filter expression to CRAM output.
+pub fn write_cram_matching_filter_from_bam_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    filter: &str,
+    writer: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    File::open(src).and_then(|reader| {
+        write_cram_matching_filter_from_bam_reader_with_reference_repository(
+            reader,
+            reference_sequence_repository,
+            filter,
+            writer,
+        )
+    })
+}
+
+/// Writes BAM records from a reader matching a filter expression to CRAM output.
+pub fn write_cram_matching_filter_from_bam_reader_with_reference<R, Q, W>(
+    reader: R,
+    reference_src: Q,
+    filter: &str,
+    writer: W,
+) -> io::Result<W>
+where
+    R: Read,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_matching_filter_from_bam_reader_with_reference_repository(
+        reader,
+        reference_sequence_repository,
+        filter,
+        writer,
+    )
+}
+
+fn write_cram_matching_filter_from_bam_reader_with_reference_repository<R, W>(
+    reader: R,
+    reference_sequence_repository: fasta::Repository,
+    filter: &str,
+    writer: W,
+) -> io::Result<W>
+where
+    R: Read,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let mut reader = bam::io::Reader::new(reader);
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = cram::io::writer::Builder::default()
+        .set_reference_sequence_repository(reference_sequence_repository)
+        .build_from_writer(writer);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records() {
+        let record = result?;
+
+        if record_matches_filter(&header, &record, &filter)? {
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish(&header)?;
+
+    Ok(writer.into_inner())
+}
+
+/// Writes indexed BAM records overlapping the given regions to CRAM output using a FASTA reference.
+pub fn write_bam_regions_as_cram_from_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    regions: &[Region],
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let index = read_associated_bam_index(&src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = bam::io::indexed_reader::Builder::default()
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let mut writer = cram::io::writer::Builder::default()
+        .set_reference_sequence_repository(reference_sequence_repository)
+        .build_from_writer(dst);
+
+    writer.write_header(&header)?;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query.records() {
+            let record = result?;
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish(&header)?;
+
+    Ok(writer.into_inner())
+}
+
+/// Writes indexed BAM records overlapping the given regions and matching a filter to CRAM output.
+pub fn write_bam_regions_matching_filter_as_cram_from_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    regions: &[Region],
+    filter: &str,
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let index = read_associated_bam_index(&src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = bam::io::indexed_reader::Builder::default()
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = cram::io::writer::Builder::default()
+        .set_reference_sequence_repository(reference_sequence_repository)
+        .build_from_writer(dst);
+
+    writer.write_header(&header)?;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query.records() {
+            let record = result?;
+
+            if record_matches_filter(&header, &record, &filter)? {
+                writer.write_alignment_record(&header, &record)?;
+            }
+        }
+    }
+
+    writer.try_finish(&header)?;
+
+    Ok(writer.into_inner())
 }
 
 /// Writes indexed BAM records overlapping the given regions to BAM output.
@@ -3164,6 +3671,45 @@ where
         for result in query.records() {
             let record = result?;
             writer.write_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish()?;
+
+    Ok(writer.into_inner().into_inner())
+}
+
+/// Writes indexed BAM records overlapping the given regions and matching a filter to BAM output.
+pub fn write_bam_regions_matching_filter_from_path<P, W>(
+    src: P,
+    regions: &[Region],
+    filter: &str,
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    W: Write,
+{
+    let index = read_associated_bam_index(&src)?;
+    let data_path = associated_data_path(&src);
+    let mut reader = bam::io::indexed_reader::Builder::default()
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = bam::io::Writer::new(dst);
+
+    writer.write_header(&header)?;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query.records() {
+            let record = result?;
+
+            if record_matches_filter(&header, &record, &filter)? {
+                writer.write_record(&header, &record)?;
+            }
         }
     }
 
@@ -3212,6 +3758,49 @@ where
         dst,
         bgzf::io::writer::CompressionLevel::default(),
     )
+}
+
+/// Writes SAM input records matching an HTSlib-style filter expression to BAM output.
+pub fn write_bam_matching_filter_from_sam_path<P, W>(src: P, filter: &str, dst: W) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    W: Write,
+{
+    let mut reader = File::open(src)
+        .map(BufReader::new)
+        .map(sam::io::Reader::new)?;
+    write_bam_matching_filter_from_sam_reader(&mut reader, filter, dst)
+}
+
+pub fn write_bam_matching_filter_from_sam_reader<R, W>(
+    reader: &mut sam::io::Reader<R>,
+    filter: &str,
+    dst: W,
+) -> io::Result<W>
+where
+    R: BufRead,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let bgzf_writer = bgzf::io::writer::Builder::default().build_from_writer(dst);
+    let mut writer = bam::io::Writer::from(bgzf_writer);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records() {
+        let record = result?;
+
+        if record_matches_filter(&header, &record, &filter)? {
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish()?;
+
+    Ok(writer.into_inner().into_inner())
 }
 
 /// Writes SAM input as BAM using an explicit BGZF compression level.
@@ -3381,6 +3970,28 @@ where
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// Writes a SAM text view of BAM records from a reader with an optional record limit.
+pub fn view_bam_as_sam_text<R>(reader: R, limit: Option<usize>) -> io::Result<String>
+where
+    R: Read,
+{
+    use sam::alignment::io::Write as _;
+
+    let mut reader = bam::io::Reader::new(reader);
+    let header = reader.read_header()?;
+    let mut writer = sam::io::Writer::new(Vec::new());
+
+    writer.write_header(&header)?;
+
+    for result in reader.records().take(limit.unwrap_or(usize::MAX)) {
+        let record = result?;
+        writer.write_alignment_record(&header, &record)?;
+    }
+
+    String::from_utf8(writer.into_inner())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
 /// Queries BAM records from a local file using its associated BAI or CSI index.
 pub fn query_bam_records_from_path<P>(src: P, region: &Region) -> io::Result<Vec<bam::Record>>
 where
@@ -3439,7 +4050,7 @@ pub fn view_bam_regions_as_sam_text_from_path_with_dedup<P>(
 where
     P: AsRef<Path>,
 {
-    view_bam_regions_as_sam_text_from_path_with_options(src, regions, deduplicate, None)
+    view_bam_regions_as_sam_text_from_path_with_options(src, regions, deduplicate, None, None)
 }
 
 /// Writes a SAM text view of indexed BAM records with an optional record limit.
@@ -3451,7 +4062,21 @@ pub fn view_bam_regions_as_sam_text_from_path_with_limit<P>(
 where
     P: AsRef<Path>,
 {
-    view_bam_regions_as_sam_text_from_path_with_options(src, regions, false, limit)
+    view_bam_regions_as_sam_text_from_path_with_options(src, regions, false, limit, None)
+}
+
+/// Writes a SAM text view of indexed BAM records matching an HTSlib-style filter expression.
+pub fn view_bam_regions_as_sam_text_matching_filter_from_path<P>(
+    src: P,
+    regions: &[Region],
+    filter: &str,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let filter = Filter::new(filter);
+
+    view_bam_regions_as_sam_text_from_path_with_options(src, regions, false, None, Some(&filter))
 }
 
 fn view_bam_regions_as_sam_text_from_path_with_options<P>(
@@ -3459,6 +4084,7 @@ fn view_bam_regions_as_sam_text_from_path_with_options<P>(
     regions: &[Region],
     deduplicate: bool,
     limit: Option<usize>,
+    filter: Option<&Filter>,
 ) -> io::Result<String>
 where
     P: AsRef<Path>,
@@ -3494,6 +4120,13 @@ where
             }
 
             let record = result?;
+
+            if let Some(filter) = filter
+                && !record_matches_filter(&header, &record, filter)?
+            {
+                continue;
+            }
+
             let mut line_writer = sam::io::Writer::new(Vec::new());
             line_writer.write_alignment_record(&header, &record)?;
             let line = line_writer.into_inner();
@@ -3551,6 +4184,39 @@ where
     P: AsRef<Path>,
 {
     query_bam_records_from_path(src, region).map(|records| records.len())
+}
+
+/// Counts indexed BAM records overlapping the given regions and matching an HTSlib-style filter expression.
+pub fn count_bam_records_in_regions_matching_filter_from_path<P>(
+    src: P,
+    regions: &[Region],
+    filter: &str,
+) -> io::Result<usize>
+where
+    P: AsRef<Path>,
+{
+    let filter = Filter::new(filter);
+    let index = read_associated_bam_index(&src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = bam::io::indexed_reader::Builder::default()
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let mut count = 0;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query.records() {
+            let record = result?;
+
+            if record_matches_filter(&header, &record, &filter)? {
+                count += 1;
+            }
+        }
+    }
+
+    Ok(count)
 }
 
 /// Reads a CRAM header from a reader.
@@ -3649,13 +4315,47 @@ where
     Q: AsRef<Path>,
     W: Write,
 {
-    use sam::alignment::io::Write as _;
-
     let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
     let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| {
+        write_cram_from_reader_with_reference_repository(
+            reader,
+            reference_sequence_repository,
+            writer,
+        )
+    })
+}
+
+/// Writes CRAM records decoded from a reader using a FASTA reference.
+pub fn write_cram_from_reader_with_reference<R, Q, W>(
+    reader: R,
+    reference_src: Q,
+    writer: W,
+) -> io::Result<W>
+where
+    R: Read,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_from_reader_with_reference_repository(reader, reference_sequence_repository, writer)
+}
+
+fn write_cram_from_reader_with_reference_repository<R, W>(
+    reader: R,
+    reference_sequence_repository: fasta::Repository,
+    writer: W,
+) -> io::Result<W>
+where
+    R: Read,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
     let mut reader = cram::io::reader::Builder::default()
         .set_reference_sequence_repository(reference_sequence_repository.clone())
-        .build_from_path(data_path)?;
+        .build_from_reader(reader);
     let header = reader.read_header()?;
     let mut writer = cram::io::writer::Builder::default()
         .set_reference_sequence_repository(reference_sequence_repository)
@@ -3666,6 +4366,88 @@ where
     for result in reader.records(&header) {
         let record = result?;
         writer.write_alignment_record(&header, &record)?;
+    }
+
+    writer.try_finish(&header)?;
+
+    Ok(writer.into_inner())
+}
+
+/// Writes CRAM input records matching an HTSlib-style filter expression to CRAM output.
+pub fn write_cram_matching_filter_from_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    filter: &str,
+    writer: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| {
+        write_cram_matching_filter_from_reader_with_reference_repository(
+            reader,
+            reference_sequence_repository,
+            filter,
+            writer,
+        )
+    })
+}
+
+/// Writes CRAM records from a reader matching a filter expression to CRAM output.
+pub fn write_cram_matching_filter_from_reader_with_reference<R, Q, W>(
+    reader: R,
+    reference_src: Q,
+    filter: &str,
+    writer: W,
+) -> io::Result<W>
+where
+    R: Read,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_matching_filter_from_reader_with_reference_repository(
+        reader,
+        reference_sequence_repository,
+        filter,
+        writer,
+    )
+}
+
+fn write_cram_matching_filter_from_reader_with_reference_repository<R, W>(
+    reader: R,
+    reference_sequence_repository: fasta::Repository,
+    filter: &str,
+    writer: W,
+) -> io::Result<W>
+where
+    R: Read,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(reference_sequence_repository.clone())
+        .build_from_reader(reader);
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = cram::io::writer::Builder::default()
+        .set_reference_sequence_repository(reference_sequence_repository)
+        .build_from_writer(writer);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records(&header) {
+        let record = result?;
+
+        if record_matches_filter(&header, &record, &filter)? {
+            writer.write_alignment_record(&header, &record)?;
+        }
     }
 
     writer.try_finish(&header)?;
@@ -3713,6 +4495,140 @@ where
     Ok(writer.into_inner().into_inner())
 }
 
+/// Writes indexed CRAM records overlapping the given regions and matching a filter to BAM output.
+pub fn write_cram_regions_matching_filter_as_bam_from_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    regions: &[Region],
+    filter: &str,
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let index = read_associated_cram_index(&src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::indexed_reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = bam::io::Writer::new(dst);
+
+    writer.write_header(&header)?;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query {
+            let record = result?;
+
+            if record_matches_filter(&header, &record, &filter)? {
+                writer.write_alignment_record(&header, &record)?;
+            }
+        }
+    }
+
+    writer.try_finish()?;
+
+    Ok(writer.into_inner().into_inner())
+}
+
+/// Writes indexed CRAM records overlapping the given regions to CRAM output using a FASTA reference.
+pub fn write_cram_regions_from_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    regions: &[Region],
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let index = read_associated_cram_index(&src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::indexed_reader::Builder::default()
+        .set_reference_sequence_repository(repository.clone())
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let mut writer = cram::io::writer::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_writer(dst);
+
+    writer.write_header(&header)?;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query {
+            let record = result?;
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish(&header)?;
+
+    Ok(writer.into_inner())
+}
+
+/// Writes indexed CRAM records overlapping the given regions and matching a filter to CRAM output.
+pub fn write_cram_regions_matching_filter_from_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    regions: &[Region],
+    filter: &str,
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let index = read_associated_cram_index(&src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::indexed_reader::Builder::default()
+        .set_reference_sequence_repository(repository.clone())
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = cram::io::writer::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_writer(dst);
+
+    writer.write_header(&header)?;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query {
+            let record = result?;
+
+            if record_matches_filter(&header, &record, &filter)? {
+                writer.write_alignment_record(&header, &record)?;
+            }
+        }
+    }
+
+    writer.try_finish(&header)?;
+
+    Ok(writer.into_inner())
+}
+
 /// Writes CRAM records with all required flag bits set to BAM output.
 pub fn write_cram_records_with_required_flags_as_bam_from_path_with_reference<P, Q, W>(
     src: P,
@@ -3725,13 +4641,55 @@ where
     Q: AsRef<Path>,
     W: Write,
 {
-    use sam::alignment::io::Write as _;
-
     let repository = cram_reference_repository_from_fasta_path(reference_src)?;
     let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| {
+        write_cram_records_with_required_flags_as_bam_with_reference_repository(
+            reader,
+            repository,
+            required_flags,
+            dst,
+        )
+    })
+}
+
+/// Writes CRAM records from a reader with all required flag bits set to BAM output.
+pub fn write_cram_records_with_required_flags_as_bam_with_reference<R, Q, W>(
+    reader: R,
+    reference_src: Q,
+    required_flags: u16,
+    dst: W,
+) -> io::Result<W>
+where
+    R: Read,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_records_with_required_flags_as_bam_with_reference_repository(
+        reader,
+        repository,
+        required_flags,
+        dst,
+    )
+}
+
+fn write_cram_records_with_required_flags_as_bam_with_reference_repository<R, W>(
+    reader: R,
+    repository: fasta::Repository,
+    required_flags: u16,
+    dst: W,
+) -> io::Result<W>
+where
+    R: Read,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
     let mut reader = cram::io::reader::Builder::default()
         .set_reference_sequence_repository(repository)
-        .build_from_path(data_path)?;
+        .build_from_reader(reader);
     let header = reader.read_header()?;
     let mut writer = bam::io::Writer::new(dst);
 
@@ -3741,6 +4699,80 @@ where
         let record = result?;
         let flags = record.flags().bits();
         if flags & required_flags == required_flags {
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    writer.try_finish()?;
+
+    Ok(writer.into_inner().into_inner())
+}
+
+/// Writes CRAM records matching an HTSlib-style filter expression to BAM output.
+pub fn write_cram_records_matching_filter_as_bam_from_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    filter: &str,
+    dst: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| {
+        write_cram_records_matching_filter_as_bam_with_reference_repository(
+            reader, repository, filter, dst,
+        )
+    })
+}
+
+/// Writes CRAM records from a reader matching a filter expression to BAM output.
+pub fn write_cram_records_matching_filter_as_bam_with_reference<R, Q, W>(
+    reader: R,
+    reference_src: Q,
+    filter: &str,
+    dst: W,
+) -> io::Result<W>
+where
+    R: Read,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_records_matching_filter_as_bam_with_reference_repository(
+        reader, repository, filter, dst,
+    )
+}
+
+fn write_cram_records_matching_filter_as_bam_with_reference_repository<R, W>(
+    reader: R,
+    repository: fasta::Repository,
+    filter: &str,
+    dst: W,
+) -> io::Result<W>
+where
+    R: Read,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_reader(reader);
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = bam::io::Writer::new(dst);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records(&header) {
+        let record = result?;
+
+        if record_matches_filter(&header, &record, &filter)? {
             writer.write_alignment_record(&header, &record)?;
         }
     }
@@ -3761,12 +4793,48 @@ where
     Q: AsRef<Path>,
     W: Write,
 {
-    use sam::alignment::io::Write as _;
-
     let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
     let mut reader = File::open(src)
         .map(BufReader::new)
         .map(sam::io::Reader::new)?;
+    write_cram_from_sam_reader_with_reference_repository(
+        &mut reader,
+        reference_sequence_repository,
+        writer,
+    )
+}
+
+/// Writes SAM input from a reader as CRAM using a FASTA reference.
+pub fn write_cram_from_sam_reader_with_reference<R, Q, W>(
+    reader: &mut sam::io::Reader<R>,
+    reference_src: Q,
+    writer: W,
+) -> io::Result<W>
+where
+    R: BufRead,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_from_sam_reader_with_reference_repository(
+        reader,
+        reference_sequence_repository,
+        writer,
+    )
+}
+
+fn write_cram_from_sam_reader_with_reference_repository<R, W>(
+    reader: &mut sam::io::Reader<R>,
+    reference_sequence_repository: fasta::Repository,
+    writer: W,
+) -> io::Result<W>
+where
+    R: BufRead,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
     let header = reader.read_header()?;
     let mut writer = cram::io::writer::Builder::default()
         .set_reference_sequence_repository(reference_sequence_repository)
@@ -3777,6 +4845,85 @@ where
     for result in reader.records() {
         let record = result?;
         writer.write_alignment_record(&header, &record)?;
+    }
+
+    writer.try_finish(&header)?;
+
+    Ok(writer.into_inner())
+}
+
+/// Writes SAM input records matching an HTSlib-style filter expression to CRAM output.
+pub fn write_cram_matching_filter_from_sam_path_with_reference<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    filter: &str,
+    writer: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let mut reader = File::open(src)
+        .map(BufReader::new)
+        .map(sam::io::Reader::new)?;
+    write_cram_matching_filter_from_sam_reader_with_reference_repository(
+        &mut reader,
+        reference_sequence_repository,
+        filter,
+        writer,
+    )
+}
+
+/// Writes SAM input records from a reader matching a filter expression to CRAM output.
+pub fn write_cram_matching_filter_from_sam_reader_with_reference<R, Q, W>(
+    reader: &mut sam::io::Reader<R>,
+    reference_src: Q,
+    filter: &str,
+    writer: W,
+) -> io::Result<W>
+where
+    R: BufRead,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_matching_filter_from_sam_reader_with_reference_repository(
+        reader,
+        reference_sequence_repository,
+        filter,
+        writer,
+    )
+}
+
+fn write_cram_matching_filter_from_sam_reader_with_reference_repository<R, W>(
+    reader: &mut sam::io::Reader<R>,
+    reference_sequence_repository: fasta::Repository,
+    filter: &str,
+    writer: W,
+) -> io::Result<W>
+where
+    R: BufRead,
+    W: Write,
+{
+    use sam::alignment::io::Write as _;
+
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut writer = cram::io::writer::Builder::default()
+        .set_reference_sequence_repository(reference_sequence_repository)
+        .build_from_writer(writer);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records() {
+        let record = result?;
+
+        if record_matches_filter(&header, &record, &filter)? {
+            writer.write_alignment_record(&header, &record)?;
+        }
     }
 
     writer.try_finish(&header)?;
@@ -3886,6 +5033,43 @@ where
     query_cram_records_from_path_with_reference(src, region, reference_src).map(Vec::into_iter)
 }
 
+/// Counts indexed CRAM records overlapping the given regions and matching an HTSlib-style filter expression.
+pub fn count_cram_records_in_regions_matching_filter_from_path_with_reference<P, Q>(
+    src: P,
+    reference_src: Q,
+    regions: &[Region],
+    filter: &str,
+) -> io::Result<usize>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let index = read_associated_cram_index(&src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::indexed_reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let filter = Filter::new(filter);
+    let mut count = 0;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query {
+            let record = result?;
+
+            if record_matches_filter(&header, &record, &filter)? {
+                count += 1;
+            }
+        }
+    }
+
+    Ok(count)
+}
+
 /// Writes a SAM text view of indexed CRAM records for regions in request order.
 pub fn view_cram_regions_as_sam_text_from_path_with_reference<P, Q>(
     src: P,
@@ -3906,6 +5090,7 @@ where
         &reference_sequences,
         regions,
         deduplicate,
+        None,
         None,
     )
 }
@@ -3931,6 +5116,7 @@ where
         regions,
         false,
         limit,
+        None,
     )
 }
 
@@ -3967,6 +5153,65 @@ where
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// Writes a SAM text view of CRAM records from a reader with an optional record limit.
+pub fn view_cram_as_sam_text_with_reference<R, Q>(
+    reader: R,
+    reference_src: Q,
+    limit: Option<usize>,
+) -> io::Result<String>
+where
+    R: Read,
+    Q: AsRef<Path>,
+{
+    use sam::alignment::io::Write as _;
+
+    let reference_sequences = read_fasta_sequences(&reference_src)?;
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_reader(reader);
+    let header = reader.read_header()?;
+    let mut writer = sam::io::Writer::new(Vec::new());
+
+    writer.write_header(&header)?;
+
+    for result in reader.records(&header).take(limit.unwrap_or(usize::MAX)) {
+        let mut record = result?;
+
+        add_md_and_nm_to_record(&reference_sequences, &header, &mut record)?;
+        writer.write_alignment_record(&header, &record)?;
+    }
+
+    String::from_utf8(writer.into_inner())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Writes a SAM text view of indexed CRAM records matching an HTSlib-style filter expression.
+pub fn view_cram_regions_as_sam_text_matching_filter_from_path_with_reference<P, Q>(
+    src: P,
+    reference_src: Q,
+    regions: &[Region],
+    filter: &str,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    let reference_sequences = read_fasta_sequences(&reference_src)?;
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let filter = Filter::new(filter);
+
+    view_cram_regions_as_sam_text_from_path_with_reference_repository(
+        src,
+        repository,
+        &reference_sequences,
+        regions,
+        false,
+        None,
+        Some(&filter),
+    )
+}
+
 fn query_cram_records_from_path_with_reference_repository<P>(
     src: P,
     region: &Region,
@@ -3994,6 +5239,7 @@ fn view_cram_regions_as_sam_text_from_path_with_reference_repository<P>(
     regions: &[Region],
     deduplicate: bool,
     limit: Option<usize>,
+    filter: Option<&Filter>,
 ) -> io::Result<String>
 where
     P: AsRef<Path>,
@@ -4044,6 +5290,12 @@ where
             let mut record = result?;
 
             if !record_intersects_region(&record, reference_sequence_id, region) {
+                continue;
+            }
+
+            if let Some(filter) = filter
+                && !record_matches_filter(&header, &record, filter)?
+            {
                 continue;
             }
 

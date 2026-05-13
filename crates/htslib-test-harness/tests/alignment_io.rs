@@ -93,6 +93,16 @@ fn sam_record_line_count(src: &str) -> usize {
 }
 
 #[test]
+fn summarizing_cram_without_reference_returns_error() {
+    let err = summarize_cram_records_from_path(fixture("range.cram")).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        err.to_string()
+            .contains("missing reference sequence: CHROMOSOME_I")
+    );
+}
+
+#[test]
 fn reads_sam_header_and_records_from_htslib_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let path = fixture("xx#minimal.sam");
     let header = read_sam_header_from_path(&path)?;
