@@ -4198,7 +4198,11 @@ fn remap_gt_token(token: &str, allele_map: &[Option<usize>]) -> io::Result<Strin
 
 #[cfg(test)]
 mod tests {
-    use std::{io::BufReader, path::PathBuf};
+    use std::{
+        io::BufReader,
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use super::{
         RegionOverlap, VcfHeaderTranslation, contig_count, count_bcf_records_from_path,
@@ -4494,8 +4498,11 @@ mod tests {
     }
 
     fn write_temp_overlap_vcf() -> PathBuf {
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let path =
-            std::env::temp_dir().join(format!("htslib-rs-overlap-{}.vcf", std::process::id()));
+            std::env::temp_dir().join(format!("htslib-rs-overlap-{}-{id}.vcf", std::process::id()));
         std::fs::write(&path, overlap_vcf_text()).unwrap();
         path
     }
