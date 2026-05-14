@@ -1,7 +1,7 @@
 //! HTSlib-compatible alignment I/O helpers backed by noodles readers.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs::File,
     io::{self, BufRead, BufReader, Read, Write},
     num::NonZero,
@@ -25,6 +25,26 @@ use crate::{
 
 /// A SAM header shared by SAM, BAM, and CRAM streams.
 pub type Header = sam::Header;
+
+/// A synchronized multi-input pileup column.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SynchronizedPileupColumn {
+    /// Reference sequence name.
+    pub reference_name: String,
+    /// 1-based reference position.
+    pub position: usize,
+    /// Total depth across all inputs.
+    pub total_depth: usize,
+    /// Per-input depth at this position.
+    pub depths_by_input: Vec<usize>,
+    /// Per-input pileup base strings.
+    pub bases_by_input: Vec<String>,
+    /// Per-input pileup quality strings.
+    pub qualities_by_input: Vec<String>,
+}
+
+type SynchronizedPileupSite = (String, usize);
+type SynchronizedPileupEntry = (usize, usize, usize);
 
 /// A mutable adapter for HTSlib-style SAM header operations.
 pub struct SamHeaderAdapter<'a> {
@@ -963,6 +983,79 @@ where
     Q: AsRef<Path>,
 {
     recalculate_baq_from_sam_path_with_options(sam_src, reference_src, false, false, true)
+}
+
+/// Calculates a BAQ tag for a single mpileup-style read/reference alignment.
+///
+/// `alignment_start` is 0-based. The returned string is the raw `BQ:Z`/`ZQ:Z`
+/// payload, or `None` when HTSlib would skip BAQ for the CIGAR shape.
+pub fn mpileup_baq_from_alignment(
+    sequence: &[u8],
+    qualities: &[u8],
+    reference: &[u8],
+    alignment_start: usize,
+    cigar: &str,
+    extended: bool,
+) -> io::Result<Option<String>> {
+    if sequence.len() != qualities.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sequence and quality lengths differ",
+        ));
+    }
+
+    let cigar = parse_sam_cigar(cigar)?;
+    calculate_baq(
+        sequence,
+        qualities,
+        reference,
+        alignment_start,
+        &cigar,
+        extended,
+    )
+}
+
+/// Scores a read against a candidate haplotype using the `bam2bcf_*` indel
+/// realignment `probaln_glocal` parameters.
+pub fn mpileup_indel_alignment_score(
+    reference: &[u8],
+    query: &[u8],
+    qualities: Option<&[u8]>,
+) -> io::Result<i32> {
+    if qualities.is_some_and(|qualities| qualities.len() != query.len()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "quality length differs from query length",
+        ));
+    }
+
+    let translated_ref = reference
+        .iter()
+        .map(|base| probaln_base_code(*base))
+        .collect::<Vec<_>>();
+    let translated_query = query
+        .iter()
+        .map(|base| probaln_base_code(*base))
+        .collect::<Vec<_>>();
+    let clipped_qualities = qualities.map(|qualities| {
+        qualities
+            .iter()
+            .map(|quality| (*quality).clamp(7, 30))
+            .collect::<Vec<_>>()
+    });
+    let result = probaln_glocal(
+        &translated_ref,
+        &translated_query,
+        clipped_qualities.as_deref(),
+        ProbalnParams {
+            d: 1e-4,
+            e: 1e-2,
+            bw: 10,
+        },
+        false,
+    )?;
+
+    Ok(result.likelihood)
 }
 
 fn recalculate_baq_from_sam_path_with_options<P, Q>(
@@ -2554,6 +2647,108 @@ where
     }
 
     push_test_pileup_report(&records)
+}
+
+/// Builds synchronized pileup columns across multiple SAM/BAM inputs.
+pub fn synchronized_pileup_from_alignment_paths<P>(
+    paths: &[P],
+) -> io::Result<Vec<SynchronizedPileupColumn>>
+where
+    P: AsRef<Path>,
+{
+    let inputs = paths
+        .iter()
+        .map(read_test_pileup_records_from_alignment_path)
+        .collect::<io::Result<Vec<_>>>()?;
+    let mut sites: BTreeMap<SynchronizedPileupSite, Vec<SynchronizedPileupEntry>> = BTreeMap::new();
+
+    for (input_index, records) in inputs.iter().enumerate() {
+        for (record_index, record) in records.iter().enumerate() {
+            for (column_index, column) in record.columns.iter().enumerate() {
+                sites
+                    .entry((record.reference_name.clone(), column.reference_position))
+                    .or_default()
+                    .push((input_index, record_index, column_index));
+            }
+        }
+    }
+
+    sites
+        .into_iter()
+        .map(|((reference_name, zero_based_position), entries)| {
+            let mut depths_by_input = vec![0; inputs.len()];
+            let mut bases_by_input = vec![String::new(); inputs.len()];
+            let mut qualities_by_input = vec![String::new(); inputs.len()];
+
+            for input_index in 0..inputs.len() {
+                let input_entries = entries
+                    .iter()
+                    .filter(|(entry_input_index, _, _)| *entry_input_index == input_index)
+                    .map(|(_, record_index, column_index)| {
+                        let record = &inputs[input_index][*record_index];
+                        let column = &record.columns[*column_index];
+                        (*record_index, record, column)
+                    })
+                    .collect::<Vec<_>>();
+
+                depths_by_input[input_index] = input_entries.len();
+                let adjusted_qualities = adjusted_test_pileup_qualities(&input_entries)?;
+
+                for ((_, record, column), quality) in input_entries.iter().zip(adjusted_qualities) {
+                    push_test_pileup_bases(&mut bases_by_input[input_index], record, column)?;
+                    push_test_pileup_quality_score(&mut qualities_by_input[input_index], quality);
+                }
+            }
+
+            Ok(SynchronizedPileupColumn {
+                reference_name,
+                position: zero_based_position + 1,
+                total_depth: depths_by_input.iter().sum(),
+                depths_by_input,
+                bases_by_input,
+                qualities_by_input,
+            })
+        })
+        .collect()
+}
+
+fn read_test_pileup_records_from_alignment_path<P>(src: P) -> io::Result<Vec<TestPileupRecord>>
+where
+    P: AsRef<Path>,
+{
+    let src = src.as_ref();
+    if src
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("bam"))
+    {
+        let mut reader = File::open(src).map(bam::io::Reader::new)?;
+        let header = reader.read_header()?;
+        let mut records = Vec::new();
+
+        for result in reader.records() {
+            let record = result?;
+            if let Some(record) = TestPileupRecord::try_from_record(&header, &record)? {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    } else {
+        let mut reader = File::open(src)
+            .map(BufReader::new)
+            .map(sam::io::Reader::new)?;
+        let header = reader.read_header()?;
+        let mut records = Vec::new();
+
+        for result in reader.records() {
+            let record = result?;
+            if let Some(record) = TestPileupRecord::try_from_record(&header, &record)? {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    }
 }
 
 /// Queries BGZF-compressed SAM records from a local file using its associated BAI or CSI index.
@@ -5352,16 +5547,21 @@ mod tests {
 
     use super::{
         count_bam_records_from_path, count_bam_records_in_region_from_path,
-        count_sam_records_from_path, query_bam_regions_from_path, read_bam_header_from_path,
-        read_cram_header_from_path, read_sam_header_from_path, reference_sequence_count,
+        count_sam_records_from_path, mpileup_baq_from_alignment, mpileup_indel_alignment_score,
+        query_bam_regions_from_path, read_bam_header_from_path, read_cram_header_from_path,
+        read_sam_header_from_path, reference_sequence_count,
+        synchronized_pileup_from_alignment_paths,
         view_sam_as_fastq_split_text_from_reader_with_flag_filter_and_suffix,
         write_bam_from_sam_reader, write_bam_regions_from_path,
     };
 
     fn fixture(path: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(path)
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        if path.starts_with("bcftools/") {
+            base.join("..").join(path)
+        } else {
+            base.join(path)
+        }
     }
 
     #[test]
@@ -5467,5 +5667,103 @@ mod tests {
         let header = read_cram_header_from_path(&path).unwrap();
 
         assert!(reference_sequence_count(&header) > 0);
+    }
+
+    #[test]
+    fn test_mpileup_baq_helper_uses_probaln_path() {
+        let reference = b"ACGTACGTACGT";
+        let sequence = b"ACGTTCGT";
+        let qualities = vec![30; sequence.len()];
+
+        let baq = mpileup_baq_from_alignment(sequence, &qualities, reference, 2, "8M", false)
+            .unwrap()
+            .unwrap();
+        let extended = mpileup_baq_from_alignment(sequence, &qualities, reference, 2, "8M", true)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(baq.len(), sequence.len());
+        assert_eq!(extended.len(), sequence.len());
+        assert!(baq.bytes().all(|b| b >= 64));
+        assert!(extended.bytes().all(|b| b >= 64));
+    }
+
+    #[test]
+    fn test_mpileup_baq_helper_skips_reference_skips() {
+        let reference = b"ACGTACGTACGT";
+        let sequence = b"ACGT";
+        let qualities = vec![30; sequence.len()];
+
+        let baq = mpileup_baq_from_alignment(sequence, &qualities, reference, 2, "2M2N2M", false)
+            .unwrap();
+
+        assert_eq!(baq, None);
+    }
+
+    #[test]
+    fn test_mpileup_indel_alignment_score_uses_bam2bcf_parameters() {
+        let exact =
+            mpileup_indel_alignment_score(b"ACGT", b"ACGT", Some(&[30, 30, 30, 30])).unwrap();
+        let inserted =
+            mpileup_indel_alignment_score(b"ACGT", b"ACGTT", Some(&[30, 30, 30, 30, 30])).unwrap();
+
+        assert_eq!(exact, 5);
+        assert!(inserted > exact);
+    }
+
+    #[test]
+    fn test_synchronized_pileup_reports_per_input_columns() {
+        let left = std::env::temp_dir().join(format!(
+            "htslib-rs-sync-pileup-{}-left.sam",
+            std::process::id()
+        ));
+        let right = std::env::temp_dir().join(format!(
+            "htslib-rs-sync-pileup-{}-right.sam",
+            std::process::id()
+        ));
+
+        std::fs::write(
+            &left,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:20\n\
+             left\t0\tsq0\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &right,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:20\n\
+             right\t0\tsq0\t2\t60\t4M\t*\t0\t0\tCGTA\tJJJJ\n",
+        )
+        .unwrap();
+
+        let columns = synchronized_pileup_from_alignment_paths(&[left.clone(), right.clone()])
+            .inspect(|_| {
+                let _ = std::fs::remove_file(&left);
+                let _ = std::fs::remove_file(&right);
+            })
+            .unwrap();
+
+        assert!(!columns.is_empty());
+        assert!(
+            columns
+                .iter()
+                .all(|column| column.depths_by_input.len() == 2)
+        );
+        assert!(
+            columns
+                .iter()
+                .all(|column| column.bases_by_input.len() == 2)
+        );
+        assert!(
+            columns
+                .iter()
+                .all(|column| column.qualities_by_input.len() == 2)
+        );
+        assert!(columns.iter().any(|column| {
+            column.depths_by_input[0] > 0
+                && column.depths_by_input[1] > 0
+                && column.total_depth == column.depths_by_input.iter().sum::<usize>()
+        }));
     }
 }

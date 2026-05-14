@@ -449,6 +449,30 @@ Goal: build a pure Rust replacement for HTSlib's C implementation, port HTSlib's
 - [x] The coverage matrix shows no unknown public APIs.
 - [x] Documentation explains what is compatible with HTSlib C and what is intentionally Rust-native.
 
+## bcftools-rs Downstream Gap Rollup
+
+These items are referenced from
+`../docs/subcommand-coverage.md`. They are not required for the completed
+Rust-only HTSlib target, but they are the known extension points needed by the
+bcftools-rs command ports.
+
+- [ ] `synced_bcf_reader` full API parity for bcftools: multi-input streaming,
+  region/target restriction, collapse modes, per-reader allele translation,
+  and command-shaped diagnostics.
+- [x] `bcf_translate` coverage beyond the synthetic translation fixture,
+  including merged-header to per-input translation tables for `merge`,
+  `concat`, `isec`, and plugins.
+- [x] Complete `bcf_update_*` mutation primitives for INFO, FORMAT, FILTER,
+  ID, QUAL, POS, alleles, and vector trimming/remapping across all bcftools
+  call sites.
+- [x] Pileup iterator surface for bcftools `mpileup`, including multi-input
+  synchronized pileup behavior.
+- [x] BAQ and `probaln_glocal` wiring for `bam2bcf*.c` call sites.
+- [ ] `hts_set_threads`/BGZF writer thread-pool support for VCF/BCF writers
+  used by `view`, `merge`, `norm`, `concat`, and `sort`.
+- [x] Region-with-target arithmetic parity for bcftools `-r`/`-R` versus
+  `-t`/`-T`, including streaming target filtering and overlap modes.
+
 ## Answered Questions and Decisions
 
 - API target: Rust-only API for now.

@@ -21,6 +21,8 @@ pub enum TextFormat {
     Bed,
     /// GFF/GTF, using 1-based closed coordinates.
     Gff,
+    /// SAM, using 1-based leftmost mapping positions.
+    Sam,
     /// VCF, using 1-based variant positions.
     Vcf,
 }
@@ -457,6 +459,7 @@ impl TextFormat {
         match self {
             Self::Bed => csi::binning_index::index::header::Builder::bed(),
             Self::Gff => csi::binning_index::index::header::Builder::gff(),
+            Self::Sam => csi::binning_index::index::header::Builder::sam(),
             Self::Vcf => csi::binning_index::index::header::Builder::vcf(),
         }
     }
@@ -477,6 +480,7 @@ fn parse_index_fields(
     match format {
         TextFormat::Bed => parse_bed_index_fields(line),
         TextFormat::Gff => parse_gff_index_fields(line),
+        TextFormat::Sam => parse_sam_index_fields(line),
         TextFormat::Vcf => parse_vcf_index_fields(line),
     }
 }
@@ -496,6 +500,17 @@ fn parse_gff_index_fields(line: &str) -> io::Result<Option<(&str, Position, Posi
     let end = parse_position(get_field(line, 4, "GFF end")?, 0)?;
 
     Ok(Some((reference_sequence_name, start, end)))
+}
+
+fn parse_sam_index_fields(line: &str) -> io::Result<Option<(&str, Position, Position)>> {
+    if line.starts_with('@') {
+        return Ok(None);
+    }
+
+    let reference_sequence_name = get_field(line, 2, "SAM reference name")?;
+    let start = parse_position(get_field(line, 3, "SAM position")?, 0)?;
+
+    Ok(Some((reference_sequence_name, start, start)))
 }
 
 fn parse_vcf_index_fields(line: &str) -> io::Result<Option<(&str, Position, Position)>> {
