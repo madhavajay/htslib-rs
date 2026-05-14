@@ -5713,10 +5713,36 @@ mod tests {
 
     #[test]
     fn test_synchronized_pileup_reports_per_input_columns() {
-        let left = fixture("bcftools/test/mpileup/mpileup.1.sam");
-        let right = fixture("bcftools/test/mpileup/mpileup.2.sam");
+        let left = std::env::temp_dir().join(format!(
+            "htslib-rs-sync-pileup-{}-left.sam",
+            std::process::id()
+        ));
+        let right = std::env::temp_dir().join(format!(
+            "htslib-rs-sync-pileup-{}-right.sam",
+            std::process::id()
+        ));
 
-        let columns = synchronized_pileup_from_alignment_paths(&[left, right]).unwrap();
+        std::fs::write(
+            &left,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:20\n\
+             left\t0\tsq0\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &right,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:20\n\
+             right\t0\tsq0\t2\t60\t4M\t*\t0\t0\tCGTA\tJJJJ\n",
+        )
+        .unwrap();
+
+        let columns = synchronized_pileup_from_alignment_paths(&[left.clone(), right.clone()])
+            .inspect(|_| {
+                let _ = std::fs::remove_file(&left);
+                let _ = std::fs::remove_file(&right);
+            })
+            .unwrap();
 
         assert!(!columns.is_empty());
         assert!(

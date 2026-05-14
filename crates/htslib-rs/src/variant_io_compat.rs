@@ -4428,71 +4428,62 @@ mod tests {
 
     #[test]
     fn test_region_and_target_default_overlap_semantics() {
-        let path = fixture("bcftools/test/overlap.vcf");
+        let path = write_temp_overlap_vcf();
 
         let region = filter_vcf_text_by_region_from_path(&path, "chr1:100-200").unwrap();
         let target = filter_vcf_text_by_target_from_path(&path, "chr1:100-200").unwrap();
 
-        assert_eq!(
-            body_lines(&region),
-            std::fs::read_to_string(fixture("bcftools/test/overlap.1.out")).unwrap()
-        );
-        assert_eq!(
-            body_lines(&target),
-            std::fs::read_to_string(fixture("bcftools/test/overlap.0.out")).unwrap()
-        );
+        assert_eq!(body_lines(&region), overlap_record_expected());
+        assert_eq!(body_lines(&target), overlap_pos_expected());
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn test_target_overlap_modes_and_exclusion_match_bcftools_fixture() {
-        let path = fixture("bcftools/test/overlap.vcf");
+        let path = write_temp_overlap_vcf();
 
         for (mode, expected) in [
-            (RegionOverlap::Pos, "bcftools/test/overlap.0.out"),
-            (RegionOverlap::Record, "bcftools/test/overlap.1.out"),
-            (RegionOverlap::Variant, "bcftools/test/overlap.2.out"),
+            (RegionOverlap::Pos, overlap_pos_expected()),
+            (RegionOverlap::Record, overlap_record_expected()),
+            (RegionOverlap::Variant, overlap_variant_expected()),
         ] {
             let output =
                 filter_vcf_text_by_target_from_path_with_overlap(&path, "chr1:100-200", mode)
                     .unwrap();
-            assert_eq!(
-                body_lines(&output),
-                std::fs::read_to_string(fixture(expected)).unwrap()
-            );
+            assert_eq!(body_lines(&output), expected);
         }
 
         for (mode, expected) in [
-            (RegionOverlap::Pos, "bcftools/test/overlap.neg0.out"),
-            (RegionOverlap::Record, "bcftools/test/overlap.neg1.out"),
-            (RegionOverlap::Variant, "bcftools/test/overlap.neg2.out"),
+            (RegionOverlap::Pos, overlap_pos_excluded_expected()),
+            (RegionOverlap::Record, overlap_record_excluded_expected()),
+            (RegionOverlap::Variant, overlap_variant_excluded_expected()),
         ] {
             let output =
                 filter_vcf_text_by_target_from_path_with_overlap(&path, "^chr1:100-200", mode)
                     .unwrap();
-            assert_eq!(
-                body_lines(&output),
-                std::fs::read_to_string(fixture(expected)).unwrap()
-            );
+            assert_eq!(body_lines(&output), expected);
         }
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn test_region_overlap_modes_match_bcftools_fixture() {
-        let path = fixture("bcftools/test/overlap.vcf");
+        let path = write_temp_overlap_vcf();
 
         for (mode, expected) in [
-            (RegionOverlap::Pos, "bcftools/test/overlap.0.out"),
-            (RegionOverlap::Record, "bcftools/test/overlap.1.out"),
-            (RegionOverlap::Variant, "bcftools/test/overlap.2.out"),
+            (RegionOverlap::Pos, overlap_pos_expected()),
+            (RegionOverlap::Record, overlap_record_expected()),
+            (RegionOverlap::Variant, overlap_variant_expected()),
         ] {
             let output =
                 filter_vcf_text_by_region_from_path_with_overlap(&path, "chr1:100-200", mode)
                     .unwrap();
-            assert_eq!(
-                body_lines(&output),
-                std::fs::read_to_string(fixture(expected)).unwrap()
-            );
+            assert_eq!(body_lines(&output), expected);
         }
+
+        std::fs::remove_file(path).unwrap();
     }
 
     fn body_lines(text: &str) -> String {
@@ -4500,6 +4491,94 @@ mod tests {
             .filter(|line| !line.starts_with('#'))
             .map(|line| format!("{line}\n"))
             .collect()
+    }
+
+    fn write_temp_overlap_vcf() -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("htslib-rs-overlap-{}.vcf", std::process::id()));
+        std::fs::write(&path, overlap_vcf_text()).unwrap();
+        path
+    }
+
+    fn overlap_vcf_text() -> &'static str {
+        "##fileformat=VCFv4.3\n\
+         ##INFO=<ID=END,Number=1,Type=Integer,Description=\"End coordinate of this variant\">\n\
+         ##contig=<ID=chr1>\n\
+         #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+         chr1\t90\toutsv1\tA\tATGC\t.\t.\tEND=99\n\
+         chr1\t90\tsv1\tA\tATGC\t.\t.\tEND=100\n\
+         chr1\t95\tdel95\tAAAAAAA\tA\t.\t.\t.\n\
+         chr1\t100\tsnp100\tA\tT\t.\t.\t.\n\
+         chr1\t101\tins101\tA\tAT\t.\t.\t.\n\
+         chr1\t200\tsnp200\tA\tT\t.\t.\t.\n\
+         chr1\t200\tdel200\tAT\tA\t.\t.\t.\n\
+         chr1\t201\tout201\tA\tT\t.\t.\t.\n"
+    }
+
+    fn overlap_pos_expected() -> String {
+        [
+            "chr1\t100\tsnp100\tA\tT\t.\t.\t.",
+            "chr1\t101\tins101\tA\tAT\t.\t.\t.",
+            "chr1\t200\tsnp200\tA\tT\t.\t.\t.",
+            "chr1\t200\tdel200\tAT\tA\t.\t.\t.",
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    fn overlap_record_expected() -> String {
+        [
+            "chr1\t90\tsv1\tA\tATGC\t.\t.\tEND=100",
+            "chr1\t95\tdel95\tAAAAAAA\tA\t.\t.\t.",
+            "chr1\t100\tsnp100\tA\tT\t.\t.\t.",
+            "chr1\t101\tins101\tA\tAT\t.\t.\t.",
+            "chr1\t200\tsnp200\tA\tT\t.\t.\t.",
+            "chr1\t200\tdel200\tAT\tA\t.\t.\t.",
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    fn overlap_variant_expected() -> String {
+        [
+            "chr1\t90\tsv1\tA\tATGC\t.\t.\tEND=100",
+            "chr1\t95\tdel95\tAAAAAAA\tA\t.\t.\t.",
+            "chr1\t100\tsnp100\tA\tT\t.\t.\t.",
+            "chr1\t101\tins101\tA\tAT\t.\t.\t.",
+            "chr1\t200\tsnp200\tA\tT\t.\t.\t.",
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    fn overlap_pos_excluded_expected() -> String {
+        [
+            "chr1\t90\toutsv1\tA\tATGC\t.\t.\tEND=99",
+            "chr1\t90\tsv1\tA\tATGC\t.\t.\tEND=100",
+            "chr1\t95\tdel95\tAAAAAAA\tA\t.\t.\t.",
+            "chr1\t201\tout201\tA\tT\t.\t.\t.",
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    fn overlap_record_excluded_expected() -> String {
+        [
+            "chr1\t90\toutsv1\tA\tATGC\t.\t.\tEND=99",
+            "chr1\t201\tout201\tA\tT\t.\t.\t.",
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    fn overlap_variant_excluded_expected() -> String {
+        [
+            "chr1\t90\toutsv1\tA\tATGC\t.\t.\tEND=99",
+            "chr1\t200\tdel200\tAT\tA\t.\t.\t.",
+            "chr1\t201\tout201\tA\tT\t.\t.\t.",
+        ]
+        .join("\n")
+            + "\n"
     }
 
     fn header_from_text(text: &str) -> super::Header {
