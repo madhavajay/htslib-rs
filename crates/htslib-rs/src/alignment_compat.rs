@@ -2882,9 +2882,10 @@ pub fn synchronized_pileup_from_alignment_paths<P>(
 where
     P: AsRef<Path>,
 {
+    let options = PileupOptions::default();
     let inputs = paths
         .iter()
-        .map(read_test_pileup_records_from_alignment_path)
+        .map(|path| read_test_pileup_records_from_alignment_path(path, &options))
         .collect::<io::Result<Vec<_>>>()?;
     let mut sites: BTreeMap<SynchronizedPileupSite, Vec<SynchronizedPileupEntry>> = BTreeMap::new();
 
@@ -2936,6 +2937,30 @@ where
             })
         })
         .collect()
+}
+
+/// Record-selection options for the pileup iterators.
+///
+/// `Default` mirrors HTSlib's pileup default: exclude unmapped (`0x4`),
+/// secondary (`0x100`), QC-fail (`0x200`) and duplicate (`0x400`) records.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PileupOptions {
+    /// Skip a record if it has any of these flag bits set.
+    pub exclude_flags: u16,
+    /// Skip a record unless it has all of these flag bits set.
+    pub require_flags: u16,
+    /// Skip a record whose mapping quality is below this value.
+    pub min_mapping_quality: u8,
+}
+
+impl Default for PileupOptions {
+    fn default() -> Self {
+        Self {
+            exclude_flags: 0x4 | 0x100 | 0x200 | 0x400,
+            require_flags: 0,
+            min_mapping_quality: 0,
+        }
+    }
 }
 
 /// A single read's contribution to a pileup column (HTSlib `bam_pileup1_t`-shaped).
@@ -3063,9 +3088,20 @@ pub fn pileup_from_alignment_paths<P>(paths: &[P]) -> io::Result<Vec<PileupColum
 where
     P: AsRef<Path>,
 {
+    pileup_from_alignment_paths_with_options(paths, &PileupOptions::default())
+}
+
+/// Like [`pileup_from_alignment_paths`] with explicit record-selection options.
+pub fn pileup_from_alignment_paths_with_options<P>(
+    paths: &[P],
+    options: &PileupOptions,
+) -> io::Result<Vec<PileupColumn>>
+where
+    P: AsRef<Path>,
+{
     let inputs = paths
         .iter()
-        .map(read_test_pileup_records_from_alignment_path)
+        .map(|path| read_test_pileup_records_from_alignment_path(path, options))
         .collect::<io::Result<Vec<_>>>()?;
 
     Ok(pileup_columns_from_inputs(&inputs))
@@ -3081,11 +3117,33 @@ where
     P: AsRef<Path>,
     Q: AsRef<Path>,
 {
+    pileup_from_alignment_paths_with_reference_and_options(
+        paths,
+        reference_src,
+        &PileupOptions::default(),
+    )
+}
+
+/// Like [`pileup_from_alignment_paths_with_reference`] with explicit
+/// record-selection options.
+pub fn pileup_from_alignment_paths_with_reference_and_options<P, Q>(
+    paths: &[P],
+    reference_src: Q,
+    options: &PileupOptions,
+) -> io::Result<Vec<PileupColumn>>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
     let repository = cram_reference_repository_from_fasta_path(reference_src)?;
     let inputs = paths
         .iter()
         .map(|path| {
-            read_test_pileup_records_from_alignment_path_with_reference(path, repository.clone())
+            read_test_pileup_records_from_alignment_path_with_reference(
+                path,
+                repository.clone(),
+                options,
+            )
         })
         .collect::<io::Result<Vec<_>>>()?;
 
@@ -3105,6 +3163,7 @@ where
 fn read_test_pileup_records_from_alignment_path_with_reference<P>(
     src: P,
     reference_sequence_repository: fasta::Repository,
+    options: &PileupOptions,
 ) -> io::Result<Vec<TestPileupRecord>>
 where
     P: AsRef<Path>,
@@ -3123,18 +3182,23 @@ where
 
         for result in reader.records(&header) {
             let record = result?;
-            if let Some(record) = TestPileupRecord::try_from_record(&header, &record)? {
+            if let Some(record) =
+                TestPileupRecord::try_from_record_with_options(&header, &record, options)?
+            {
                 records.push(record);
             }
         }
 
         Ok(records)
     } else {
-        read_test_pileup_records_from_alignment_path(src)
+        read_test_pileup_records_from_alignment_path(src, options)
     }
 }
 
-fn read_test_pileup_records_from_alignment_path<P>(src: P) -> io::Result<Vec<TestPileupRecord>>
+fn read_test_pileup_records_from_alignment_path<P>(
+    src: P,
+    options: &PileupOptions,
+) -> io::Result<Vec<TestPileupRecord>>
 where
     P: AsRef<Path>,
 {
@@ -3149,7 +3213,9 @@ where
 
         for result in reader.records() {
             let record = result?;
-            if let Some(record) = TestPileupRecord::try_from_record(&header, &record)? {
+            if let Some(record) =
+                TestPileupRecord::try_from_record_with_options(&header, &record, options)?
+            {
                 records.push(record);
             }
         }
@@ -3164,7 +3230,9 @@ where
 
         for result in reader.records() {
             let record = result?;
-            if let Some(record) = TestPileupRecord::try_from_record(&header, &record)? {
+            if let Some(record) =
+                TestPileupRecord::try_from_record_with_options(&header, &record, options)?
+            {
                 records.push(record);
             }
         }
@@ -5987,11 +6055,22 @@ impl TestPileupRecord {
     where
         R: sam::alignment::Record + ?Sized,
     {
-        use sam::alignment::record::Flags;
+        Self::try_from_record_with_options(header, record, &PileupOptions::default())
+    }
 
+    fn try_from_record_with_options<R>(
+        header: &Header,
+        record: &R,
+        options: &PileupOptions,
+    ) -> io::Result<Option<Self>>
+    where
+        R: sam::alignment::Record + ?Sized,
+    {
         let flags = record.flags()?;
+        let flag_bits = u16::from(flags);
 
-        if flags.intersects(Flags::UNMAPPED | Flags::SECONDARY | Flags::QC_FAIL | Flags::DUPLICATE)
+        if flag_bits & options.exclude_flags != 0
+            || flag_bits & options.require_flags != options.require_flags
         {
             return Ok(None);
         }
@@ -6002,6 +6081,15 @@ impl TestPileupRecord {
         let Some(alignment_start) = record.alignment_start().transpose()? else {
             return Ok(None);
         };
+
+        let mapping_quality = record
+            .mapping_quality()
+            .transpose()?
+            .map_or(255, |q| q.get());
+
+        if mapping_quality < options.min_mapping_quality {
+            return Ok(None);
+        }
 
         let name = record.name().map(|name| name.to_vec());
         let reference_name = header
@@ -6021,10 +6109,6 @@ impl TestPileupRecord {
             quality_scores.resize(sequence.len(), u8::MAX);
         }
 
-        let mapping_quality = record
-            .mapping_quality()
-            .transpose()?
-            .map_or(255, |q| q.get());
         let start = usize::from(alignment_start) - 1;
         let mut columns = test_pileup_columns(record, start, &sequence)?;
 
@@ -7307,6 +7391,56 @@ mod tests {
             assert_eq!(column.total_depth(), 2);
             assert_eq!(column.reads_by_input[0], column.reads_by_input[1]);
         }
+    }
+
+    #[test]
+    fn test_pileup_options_filter_by_flags_and_mapq() {
+        use super::{PileupOptions, pileup_from_alignment_paths_with_options};
+
+        let path =
+            std::env::temp_dir().join(format!("htslib-rs-plp-opts-{}-in.sam", std::process::id()));
+        std::fs::write(
+            &path,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:20\n\
+             keep\t0\tsq0\t1\t40\t4M\t*\t0\t0\tACGT\tIIII\n\
+             dup\t1024\tsq0\t1\t40\t4M\t*\t0\t0\tACGT\tIIII\n\
+             lowmq\t0\tsq0\t1\t5\t4M\t*\t0\t0\tACGT\tIIII\n",
+        )
+        .unwrap();
+
+        // Default: excludes the duplicate, keeps both mapq-40 and mapq-5.
+        let default_cols = pileup_from_alignment_paths_with_options(
+            std::slice::from_ref(&path),
+            &PileupOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(column_at(&default_cols, 1).total_depth(), 2);
+
+        // Raise the mapq floor: only the mapq-40 read survives.
+        let mq_cols = pileup_from_alignment_paths_with_options(
+            std::slice::from_ref(&path),
+            &PileupOptions {
+                min_mapping_quality: 10,
+                ..PileupOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(column_at(&mq_cols, 1).total_depth(), 1);
+
+        // Empty exclude mask: the duplicate is now included.
+        let cols = pileup_from_alignment_paths_with_options(
+            std::slice::from_ref(&path),
+            &PileupOptions {
+                exclude_flags: 0,
+                ..PileupOptions::default()
+            },
+        )
+        .inspect(|_| {
+            let _ = std::fs::remove_file(&path);
+        })
+        .unwrap();
+        assert_eq!(column_at(&cols, 1).total_depth(), 3);
     }
 
     #[test]
