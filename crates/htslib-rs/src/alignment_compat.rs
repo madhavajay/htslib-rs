@@ -3160,6 +3160,220 @@ impl PileupColumn {
     }
 }
 
+/// Faithful port of `samtools/bam_consensus.c` `nm_init`'s per-read
+/// precompute (default options: `adj_qual` on, `homopoly_fix` off,
+/// non-`BAYES_116`). Produces the packed `local_nm` array: high 8 bits
+/// = homopolymer run length, low 24 bits = local-NM score. `seq` is
+/// ASCII bases, `qual` Phred, `cigar` as `(bam_op,len)`, `md` the MD
+/// aux bytes. `poly_len`/`nm_local` index this array.
+///
+/// `homopoly_fix` (opt-in, no test fixtures) is not modelled.
+#[allow(clippy::needless_range_loop)]
+pub fn compute_local_nm(
+    seq: &[u8],
+    qual: &[u8],
+    cigar: &[(u8, usize)],
+    md: Option<&[u8]>,
+    nm_halo: i64,
+    sc_cost: i32,
+    mode_bayes116: bool,
+) -> Vec<i32> {
+    let qlen = seq.len();
+    let mut local_nm = vec![0i32; qlen];
+    if qlen == 0 {
+        return local_nm;
+    }
+    let q = |i: usize| qual.get(i).copied().unwrap_or(0) as i32;
+    let poly_adj = 1.0f64; // homopoly_fix off
+
+    // --- adj_qual: accumulate the local quality-deficit into local_nm
+    let qhalo = 8usize;
+    let qhalop = 2usize;
+    let mut qmin = q(0);
+    let mut qminp = q(0);
+    let base0 = seq[0];
+    for i in 1..qlen {
+        if seq[i] != base0 {
+            break;
+        }
+        if i < qhalop && qminp > q(i) {
+            qminp = q(i);
+        }
+    }
+    let mut i = 0usize;
+    while i < qlen && i < qhalo {
+        if qmin > q(i) {
+            qmin = q(i);
+        }
+        i += 1;
+    }
+    while i + qhalo < qlen {
+        // homopoly_fix off => polyl == polyr == 0, pl == 0
+        let t = if mode_bayes116 {
+            (q(i) + 5 * qmin) / 4
+        } else {
+            q(i) / 3 + (qminp as f64 * poly_adj) as i32
+        };
+        if t < q(i) {
+            local_nm[i] += q(i) - t;
+        }
+        qminp = q(i);
+        // inner k-loop over [max(0,i-qhalop)..=min(0,i+qhalop)] is empty
+        // for i>qhalop (polyl=polyr=0), matching upstream.
+        if qmin > q(i + qhalo) {
+            qmin = q(i + qhalo);
+        } else if qmin <= q(i - qhalo) {
+            qmin = 99;
+            for j in (i - qhalo + 1)..=(i + qhalo) {
+                if qmin > q(j) {
+                    qmin = q(j);
+                }
+            }
+        }
+        i += 1;
+    }
+    while i < qlen {
+        let t = if mode_bayes116 {
+            (q(i) + 5 * qmin) / 4
+        } else {
+            q(i) / 3 + (qminp as f64 * poly_adj) as i32
+        };
+        if t < q(i) {
+            local_nm[i] += q(i) - t;
+        }
+        i += 1;
+    }
+
+    // --- homopolymer run length into the high 8 bits
+    let mut i = 0usize;
+    while i < qlen {
+        let b = seq[i];
+        let mut j = i + 1;
+        while j < qlen && seq[j] == b {
+            j += 1;
+        }
+        let mut poly = (j - i - 1) as i32;
+        if poly > 100 {
+            poly = 100;
+        }
+        // HALO == 0 => k in [i, j)
+        for k in i..j {
+            let cur = local_nm[k];
+            local_nm[k] = (poly.max(cur >> 24) << 24) | (cur & ((1 << 24) - 1));
+        }
+        i = j;
+    }
+
+    // --- soft-clip cost at the read ends
+    let is_sc = |idx: usize| -> bool {
+        cigar
+            .get(idx)
+            .map(|&(op, _)| {
+                op == 4 // S
+                    || (op == 5 // H then S
+                        && cigar.len() > 1
+                        && cigar.get(idx + 1).is_some_and(|&(o, _)| o == 4))
+            })
+            .unwrap_or(false)
+    };
+    let halo = nm_halo;
+    if !cigar.is_empty() && (cigar[0].0 == 4 || is_sc(0)) {
+        let mut k = 0i64;
+        while k < halo && (k as usize) < qlen {
+            local_nm[k as usize] += sc_cost;
+            k += 1;
+        }
+        while k < halo * 2 && (k as usize) < qlen {
+            local_nm[k as usize] += sc_cost >> 1;
+            k += 1;
+        }
+    }
+    let last = cigar.len().wrapping_sub(1);
+    let tail_sc = !cigar.is_empty()
+        && (cigar[last].0 == 4
+            || (cigar[last].0 == 5
+                && cigar.len() > 1
+                && cigar[last - 1].0 == 4));
+    if tail_sc {
+        let mut k = qlen as i64 - 1;
+        while k >= qlen as i64 - halo && k >= 0 {
+            local_nm[k as usize] += sc_cost;
+            k -= 1;
+        }
+        while k >= qlen as i64 - halo * 2 && k >= 0 {
+            local_nm[k as usize] += sc_cost >> 1;
+            k -= 1;
+        }
+    }
+
+    // --- MD walk: haloed mismatch cost (upstream does NOT advance `pos`
+    // past the mismatch base; deletions `^...` are skipped).
+    if let Some(md) = md {
+        let mut pos: i64 = 0;
+        let mut p = 0usize;
+        while p < md.len() {
+            let c = md[p];
+            if c.is_ascii_digit() {
+                let mut n: i64 = 0;
+                while p < md.len() && md[p].is_ascii_digit() {
+                    n = n * 10 + (md[p] - b'0') as i64;
+                    p += 1;
+                }
+                pos += n;
+                continue;
+            }
+            if c == b'^' {
+                p += 1;
+                while p < md.len() && !md[p].is_ascii_digit() {
+                    p += 1;
+                }
+                continue;
+            }
+            let h = halo;
+            let mut k = if pos - h * 2 >= 0 { pos - h * 2 } else { 0 };
+            while k < pos - h && (k as usize) < qlen {
+                local_nm[k as usize] += 5;
+                k += 1;
+            }
+            while k < pos + h && (k as usize) < qlen {
+                local_nm[k as usize] += 10;
+                k += 1;
+            }
+            while k < pos + h * 2 && (k as usize) < qlen {
+                local_nm[k as usize] += 5;
+                k += 1;
+            }
+            p += 1;
+        }
+    }
+
+    local_nm
+}
+
+/// `poly_len(pos)` / `nm_local(pos)` over a precomputed `local_nm`,
+/// where `idx` is the upstream `pos - b->core.pos` (= `seq_offset+1`).
+pub fn local_nm_poly(local_nm: &[i32], idx: i64) -> i32 {
+    if idx >= 0 && (idx as usize) < local_nm.len() {
+        local_nm[idx as usize] >> 24
+    } else {
+        0
+    }
+}
+
+pub fn local_nm_score(local_nm: &[i32], idx: i64) -> f64 {
+    if local_nm.is_empty() {
+        return 0.0;
+    }
+    let mask = (1 << 24) - 1;
+    if idx < 0 {
+        (local_nm[0] & mask) as f64
+    } else if idx as usize >= local_nm.len() {
+        (local_nm[local_nm.len() - 1] & mask) as f64
+    } else {
+        (local_nm[idx as usize] & mask) as f64 / 10.0
+    }
+}
+
 fn pileup_read_from_column(record: &TestPileupRecord, column: &TestPileupColumn) -> PileupRead {
     let qpos_quality = record.quality_scores.get(column.qpos).copied().unwrap_or(0);
     let quality = if column.base.is_some() {
@@ -7346,6 +7560,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
+        compute_local_nm, local_nm_poly, local_nm_score,
         PileupColumn, count_bam_records_from_path, count_bam_records_in_region_from_path,
         count_sam_records_from_path, mpileup_baq_from_alignment, mpileup_indel_alignment_score,
         pileup_from_alignment_paths, pileup_from_alignment_paths_with_reference,
@@ -7821,5 +8036,48 @@ mod tests {
 
         assert!(!from_bam.is_empty());
         assert_eq!(from_bam, from_cram);
+    }
+
+    #[test]
+    fn compute_local_nm_packs_poly_and_md_mismatch_cost() {
+        // 10bp read, qual 40, no clips, MD "4A5" -> one mismatch at
+        // reference offset 4. Defaults: nm_halo=50, sc_cost=60.
+        let seq = b"ACGTACGTAC";
+        let qual = [40u8; 10];
+        let cigar = [(0u8, 10usize)]; // 10M
+        let lnm = compute_local_nm(seq, &qual, &cigar, Some(b"4A5"), 50, 60, false);
+        assert_eq!(lnm.len(), 10);
+
+        // Homopolymer high-8-bits: this seq has no runs (poly 0 every
+        // base), so >>24 == 0 everywhere.
+        for &v in &lnm {
+            assert_eq!(v >> 24, 0);
+        }
+        // The single MD mismatch at pos 4 adds the +10 inner halo to
+        // every base (halo=50 spans the whole 10bp read), plus the
+        // adj_qual deficit. So all low-24 scores are > 0.
+        for &v in &lnm {
+            assert!(v & ((1 << 24) - 1) > 0, "mismatch halo + adj_qual");
+        }
+        // local_nm_score divides the masked value by 10; idx clamping.
+        assert_eq!(local_nm_score(&lnm, -1), (lnm[0] & 0xff_ffff) as f64);
+        assert_eq!(
+            local_nm_score(&lnm, 99),
+            (lnm[9] & 0xff_ffff) as f64
+        );
+        assert_eq!(
+            local_nm_score(&lnm, 4),
+            (lnm[4] & 0xff_ffff) as f64 / 10.0
+        );
+
+        // A homopolymer read: AAAAA -> first base sees a run of 4
+        // following, poly=4 in the high bits for the whole run.
+        let hp = compute_local_nm(b"AAAAA", &[30u8; 5], &[(0u8, 5)], None, 50, 60, false);
+        assert_eq!(hp[0] >> 24, 4);
+        assert_eq!(local_nm_poly(&hp, 0), 4);
+        assert_eq!(local_nm_poly(&hp, 10), 0); // out of range -> 0
+
+        // Empty read is handled.
+        assert!(compute_local_nm(b"", &[], &[], None, 50, 60, false).is_empty());
     }
 }
