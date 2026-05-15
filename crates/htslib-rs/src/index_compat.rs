@@ -256,7 +256,12 @@ where
 {
     let mut reader = File::open(src).map(bam::io::Reader::new)?;
     let header = reader.read_header()?;
-    let mut indexer = alignment_csi_indexer(min_shift);
+    // Size the CSI depth from the largest reference so very large
+    // references (e.g. > 2^29, which BAI cannot address) get enough bin
+    // levels — matching upstream CSI auto-sizing. The SAM-CSI builder
+    // already does this; the BAM path previously used a fixed depth of 5.
+    let depth = alignment_csi_depth_for_header(&header, min_shift);
+    let mut indexer = alignment_csi_indexer_with_depth(min_shift, depth);
     let mut record = bam::Record::default();
     let mut start_position = reader.get_ref().virtual_position();
 

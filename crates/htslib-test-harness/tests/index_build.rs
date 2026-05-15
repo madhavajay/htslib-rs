@@ -39,6 +39,39 @@ fn cleanup(paths: &[PathBuf]) {
 }
 
 #[test]
+fn builds_csi_for_very_large_reference_and_queries_it() -> Result<(), Box<dyn std::error::Error>> {
+    use htslib_rs::bam;
+    use htslib_rs::csi::BinningIndex;
+    use htslib_rs::sam;
+    use htslib_rs::sam::alignment::io::Write as _;
+
+    // ref2 length 541556283 > 2^29 (BAI's limit). The BAM-CSI builder must
+    // auto-size depth from the header so the index can address it without
+    // a "index out of bounds" panic.
+    let sam_text = "@HD\tVN:1.6\tSO:coordinate\n\
+                    @SQ\tSN:ref2\tLN:541556283\n\
+                    r\t0\tref2\t536880911\t60\t5M\t*\t0\t0\tACGTA\tIIIII\n";
+    let mut sam_reader = sam::io::Reader::new(std::io::Cursor::new(sam_text.as_bytes()));
+    let header = sam_reader.read_header()?;
+
+    let bam_path = temp_path("large-ref.bam");
+    let mut writer = bam::io::Writer::new(File::create(&bam_path)?);
+    writer.write_header(&header)?;
+    for result in sam_reader.records() {
+        writer.write_alignment_record(&header, &result?)?;
+    }
+    drop(writer);
+
+    let index = build_bam_csi_with_min_shift(&bam_path, 14)?;
+    cleanup(&[bam_path]);
+
+    // depth must exceed the old fixed 5 to cover > 2^29.
+    assert!(index.depth() > 5);
+    assert_eq!(csi_reference_sequence_count(&index), 1);
+    Ok(())
+}
+
+#[test]
 fn builds_bai_for_bam_without_so_coordinate_header() -> Result<(), Box<dyn std::error::Error>> {
     use htslib_rs::bam;
     use htslib_rs::sam;
