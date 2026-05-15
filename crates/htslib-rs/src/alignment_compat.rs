@@ -5430,6 +5430,50 @@ where
     query_cram_records_from_path_with_reference(src, region, reference_src).map(Vec::into_iter)
 }
 
+/// Reads **every** record of a CRAM file (no region/index required), decoding
+/// against a FASTA reference and returning owned [`sam::alignment::RecordBuf`]
+/// values with full sequence/quality/aux/flags preserved.
+///
+/// This is the non-region complement of
+/// [`query_cram_records_from_path_with_reference`]; the `summarize_*` path
+/// only yields coordinate summaries and discards per-record sequence/quality.
+pub fn query_cram_records_all_from_path_with_reference<P, Q>(
+    src: P,
+    reference_src: Q,
+) -> io::Result<Vec<sam::alignment::RecordBuf>>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+
+    reader
+        .records(&header)
+        .map(|result| {
+            result.and_then(|record| {
+                sam::alignment::RecordBuf::try_from_alignment_record(&header, &record)
+            })
+        })
+        .collect()
+}
+
+/// Owning-iterator form of [`query_cram_records_all_from_path_with_reference`].
+pub fn iter_cram_records_all_from_path_with_reference<P, Q>(
+    src: P,
+    reference_src: Q,
+) -> io::Result<std::vec::IntoIter<sam::alignment::RecordBuf>>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    query_cram_records_all_from_path_with_reference(src, reference_src).map(Vec::into_iter)
+}
+
 /// Counts indexed CRAM records overlapping the given regions and matching an HTSlib-style filter expression.
 pub fn count_cram_records_in_regions_matching_filter_from_path_with_reference<P, Q>(
     src: P,
@@ -7662,6 +7706,40 @@ mod tests {
                 .iter()
                 .any(|r| r.name.as_deref() == Some(b"o"))
         }));
+    }
+
+    #[test]
+    fn test_cram_all_records_match_bam_equivalent() {
+        use super::query_cram_records_all_from_path_with_reference;
+        use crate::sam::alignment::RecordBuf;
+
+        let cram = fixture("htslib/test/range.cram");
+        let reference = fixture("htslib/test/ce.fa");
+        let bam = fixture("htslib/test/range.bam");
+
+        let cram_records =
+            query_cram_records_all_from_path_with_reference(&cram, &reference).unwrap();
+
+        let mut reader = crate::bam::io::Reader::new(std::fs::File::open(&bam).unwrap());
+        let bam_header = reader.read_header().unwrap();
+        let bam_records: Vec<RecordBuf> = reader
+            .records()
+            .map(|r| RecordBuf::try_from_alignment_record(&bam_header, &r.unwrap()).unwrap())
+            .collect();
+
+        assert!(!cram_records.is_empty());
+        assert_eq!(cram_records.len(), bam_records.len());
+
+        for (c, b) in cram_records.iter().zip(&bam_records) {
+            assert_eq!(c.name(), b.name());
+            assert_eq!(c.flags(), b.flags());
+            assert_eq!(c.alignment_start(), b.alignment_start());
+            assert_eq!(c.sequence().as_ref(), b.sequence().as_ref());
+            assert_eq!(c.quality_scores().as_ref(), b.quality_scores().as_ref());
+            // NM is reference-derived and not stored in CRAM; noodles does
+            // not synthesize it on decode, so it is recomputed by callers
+            // (e.g. stats/reference) rather than asserted here.
+        }
     }
 
     #[test]
