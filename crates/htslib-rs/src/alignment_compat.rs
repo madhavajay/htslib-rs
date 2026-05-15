@@ -6241,6 +6241,14 @@ struct TestPileupRecord {
     template_length: i32,
     sequence: Vec<u8>,
     quality_scores: Vec<u8>,
+    /// CIGAR ops as `(bam_op_code, len)` — M0 I1 D2 N3 S4 H5 P6 =7 X8.
+    /// Needed by the consensus Bayesian `nm_init` precompute
+    /// (soft-clip cost + the MD reference walk).
+    cigar: Vec<(u8, usize)>,
+    /// `MD` aux tag bytes, when present (drives the per-base local-NM).
+    md: Option<Vec<u8>>,
+    /// `NM` aux tag value, when present.
+    nm: Option<i64>,
     columns: Vec<TestPileupColumn>,
 }
 
@@ -6342,6 +6350,36 @@ impl TestPileupRecord {
             last.is_tail = true;
         }
 
+        // Capture CIGAR + MD/NM for the consensus Bayesian `nm_init`
+        // precompute (additive; unused by the existing pileup paths).
+        use sam::alignment::record::cigar::op::Kind as CigKind;
+        let mut cigar = Vec::new();
+        for result in record.cigar().iter() {
+            let op = result?;
+            let code = match op.kind() {
+                CigKind::Match => 0u8,
+                CigKind::Insertion => 1,
+                CigKind::Deletion => 2,
+                CigKind::Skip => 3,
+                CigKind::SoftClip => 4,
+                CigKind::HardClip => 5,
+                CigKind::Pad => 6,
+                CigKind::SequenceMatch => 7,
+                CigKind::SequenceMismatch => 8,
+            };
+            cigar.push((code, op.len()));
+        }
+        use sam::alignment::record::data::field::{Tag, Value};
+        let data = record.data();
+        let md = match data.get(&Tag::MISMATCHED_POSITIONS).transpose()? {
+            Some(Value::String(s)) => Some(s.to_string().into_bytes()),
+            _ => None,
+        };
+        let nm = match data.get(&Tag::EDIT_DISTANCE).transpose()? {
+            Some(v) => v.as_int(),
+            None => None,
+        };
+
         Ok(Some(Self {
             name,
             reference_name,
@@ -6355,6 +6393,9 @@ impl TestPileupRecord {
             template_length,
             sequence,
             quality_scores,
+            cigar,
+            md,
+            nm,
             columns,
         }))
     }
