@@ -2976,6 +2976,10 @@ pub struct PileupRead {
     pub base: Option<u8>,
     /// Base quality (Phred) at this column; `None` for a deletion or reference skip.
     pub quality: Option<u8>,
+    /// Raw read quality at `qpos` regardless of deletion/refskip (`0` when
+    /// `qpos` is past the sequence). Mirrors HTSlib's
+    /// `qpos < l_qseq ? qual[qpos] : 0` used by mpileup's base-quality gate.
+    pub qpos_quality: u8,
     /// 0-based offset into the read sequence aligned at this column.
     pub qpos: usize,
     /// This column is a deletion in the read (CIGAR `D`).
@@ -3017,6 +3021,7 @@ impl PileupColumn {
 }
 
 fn pileup_read_from_column(record: &TestPileupRecord, column: &TestPileupColumn) -> PileupRead {
+    let qpos_quality = record.quality_scores.get(column.qpos).copied().unwrap_or(0);
     let quality = if column.base.is_some() {
         record.quality_scores.get(column.qpos).copied()
     } else {
@@ -3042,6 +3047,7 @@ fn pileup_read_from_column(record: &TestPileupRecord, column: &TestPileupColumn)
         is_reverse: record.is_reverse,
         base: column.base,
         quality,
+        qpos_quality,
         qpos: column.qpos,
         is_deletion: column.is_deletion,
         is_refskip: column.is_refskip,
