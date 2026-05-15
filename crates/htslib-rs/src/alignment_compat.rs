@@ -2938,6 +2938,202 @@ where
         .collect()
 }
 
+/// A single read's contribution to a pileup column (HTSlib `bam_pileup1_t`-shaped).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PileupRead {
+    /// Read name, when present.
+    pub name: Option<Vec<u8>>,
+    /// Mapping quality (255 when unavailable).
+    pub mapping_quality: u8,
+    /// Whether the read is reverse-complemented.
+    pub is_reverse: bool,
+    /// Query base at this column; `None` for a deletion or reference skip.
+    pub base: Option<u8>,
+    /// Base quality (Phred) at this column; `None` for a deletion or reference skip.
+    pub quality: Option<u8>,
+    /// 0-based offset into the read sequence aligned at this column.
+    pub qpos: usize,
+    /// This column is a deletion in the read (CIGAR `D`).
+    pub is_deletion: bool,
+    /// This column is a reference skip in the read (CIGAR `N`).
+    pub is_refskip: bool,
+    /// This is the first aligned column of the read.
+    pub is_head: bool,
+    /// This is the last aligned column of the read.
+    pub is_tail: bool,
+    /// Indel immediately following this column: `>0` insertion length, `<0`
+    /// deletion length, `0` none (HTSlib `bam_pileup1_t::indel`).
+    pub indel: i32,
+    /// Inserted bases immediately following this column (when `indel > 0`).
+    pub insertion: Vec<u8>,
+}
+
+/// A pileup column synchronized across one or more inputs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PileupColumn {
+    /// Reference sequence name.
+    pub reference_name: String,
+    /// 1-based reference position.
+    pub position: usize,
+    /// Reads overlapping this column, grouped by input in argument order.
+    pub reads_by_input: Vec<Vec<PileupRead>>,
+}
+
+impl PileupColumn {
+    /// Total depth across all inputs at this column.
+    pub fn total_depth(&self) -> usize {
+        self.reads_by_input.iter().map(Vec::len).sum()
+    }
+
+    /// Depth contributed by a single input index.
+    pub fn depth_of_input(&self, input_index: usize) -> usize {
+        self.reads_by_input.get(input_index).map_or(0, Vec::len)
+    }
+}
+
+fn pileup_read_from_column(record: &TestPileupRecord, column: &TestPileupColumn) -> PileupRead {
+    let quality = if column.base.is_some() {
+        record.quality_scores.get(column.qpos).copied()
+    } else {
+        None
+    };
+    let (indel, insertion) = if !column.insertion_after.is_empty() {
+        (
+            i32::try_from(column.insertion_after.len()).unwrap_or(i32::MAX),
+            column.insertion_after.clone(),
+        )
+    } else if column.deletion_after > 0 {
+        (
+            -i32::try_from(column.deletion_after).unwrap_or(i32::MAX),
+            Vec::new(),
+        )
+    } else {
+        (0, Vec::new())
+    };
+
+    PileupRead {
+        name: record.name.clone(),
+        mapping_quality: record.mapping_quality,
+        is_reverse: record.is_reverse,
+        base: column.base,
+        quality,
+        qpos: column.qpos,
+        is_deletion: column.is_deletion,
+        is_refskip: column.is_refskip,
+        is_head: column.is_head,
+        is_tail: column.is_tail,
+        indel,
+        insertion,
+    }
+}
+
+fn pileup_columns_from_inputs(inputs: &[Vec<TestPileupRecord>]) -> Vec<PileupColumn> {
+    let mut sites: BTreeMap<(String, usize), Vec<Vec<PileupRead>>> = BTreeMap::new();
+
+    for (input_index, records) in inputs.iter().enumerate() {
+        for record in records {
+            for column in &record.columns {
+                let entry = sites
+                    .entry((record.reference_name.clone(), column.reference_position))
+                    .or_insert_with(|| vec![Vec::new(); inputs.len()]);
+                entry[input_index].push(pileup_read_from_column(record, column));
+            }
+        }
+    }
+
+    sites
+        .into_iter()
+        .map(
+            |((reference_name, zero_based_position), reads_by_input)| PileupColumn {
+                reference_name,
+                position: zero_based_position + 1,
+                reads_by_input,
+            },
+        )
+        .collect()
+}
+
+/// Builds synchronized pileup columns across multiple SAM/BAM inputs.
+///
+/// Each column reports, per input, the [`PileupRead`] entries overlapping a
+/// reference position (HTSlib `bam_plp`/`sam_pileup`-shaped). Unmapped,
+/// secondary, QC-fail and duplicate records are excluded, matching HTSlib's
+/// default pileup behavior.
+pub fn pileup_from_alignment_paths<P>(paths: &[P]) -> io::Result<Vec<PileupColumn>>
+where
+    P: AsRef<Path>,
+{
+    let inputs = paths
+        .iter()
+        .map(read_test_pileup_records_from_alignment_path)
+        .collect::<io::Result<Vec<_>>>()?;
+
+    Ok(pileup_columns_from_inputs(&inputs))
+}
+
+/// Like [`pileup_from_alignment_paths`] but also accepts CRAM inputs, decoding
+/// them against the supplied FASTA reference.
+pub fn pileup_from_alignment_paths_with_reference<P, Q>(
+    paths: &[P],
+    reference_src: Q,
+) -> io::Result<Vec<PileupColumn>>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let inputs = paths
+        .iter()
+        .map(|path| {
+            read_test_pileup_records_from_alignment_path_with_reference(path, repository.clone())
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+
+    Ok(pileup_columns_from_inputs(&inputs))
+}
+
+/// Iterator form of [`pileup_from_alignment_paths`].
+pub fn iter_pileup_from_alignment_paths<P>(
+    paths: &[P],
+) -> io::Result<std::vec::IntoIter<PileupColumn>>
+where
+    P: AsRef<Path>,
+{
+    pileup_from_alignment_paths(paths).map(|columns| columns.into_iter())
+}
+
+fn read_test_pileup_records_from_alignment_path_with_reference<P>(
+    src: P,
+    reference_sequence_repository: fasta::Repository,
+) -> io::Result<Vec<TestPileupRecord>>
+where
+    P: AsRef<Path>,
+{
+    let src = src.as_ref();
+    if src
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cram"))
+    {
+        let data_path = associated_data_path(src);
+        let mut reader = cram::io::reader::Builder::default()
+            .set_reference_sequence_repository(reference_sequence_repository)
+            .build_from_path(data_path)?;
+        let header = reader.read_header()?;
+        let mut records = Vec::new();
+
+        for result in reader.records(&header) {
+            let record = result?;
+            if let Some(record) = TestPileupRecord::try_from_record(&header, &record)? {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    } else {
+        read_test_pileup_records_from_alignment_path(src)
+    }
+}
+
 fn read_test_pileup_records_from_alignment_path<P>(src: P) -> io::Result<Vec<TestPileupRecord>>
 where
     P: AsRef<Path>,
@@ -6798,14 +6994,22 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        count_bam_records_from_path, count_bam_records_in_region_from_path,
+        PileupColumn, count_bam_records_from_path, count_bam_records_in_region_from_path,
         count_sam_records_from_path, mpileup_baq_from_alignment, mpileup_indel_alignment_score,
+        pileup_from_alignment_paths, pileup_from_alignment_paths_with_reference,
         query_bam_regions_from_path, read_bam_header_from_path, read_cram_header_from_path,
         read_sam_header_from_path, reference_sequence_count,
         synchronized_pileup_from_alignment_paths,
         view_sam_as_fastq_split_text_from_reader_with_flag_filter_and_suffix,
         write_bam_from_sam_reader, write_bam_regions_from_path,
     };
+
+    fn column_at(columns: &[PileupColumn], position: usize) -> &PileupColumn {
+        columns
+            .iter()
+            .find(|column| column.position == position)
+            .unwrap_or_else(|| panic!("no pileup column at position {position}"))
+    }
 
     fn fixture(path: &str) -> PathBuf {
         let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -7017,5 +7221,106 @@ mod tests {
                 && column.depths_by_input[1] > 0
                 && column.total_depth == column.depths_by_input.iter().sum::<usize>()
         }));
+    }
+
+    #[test]
+    fn test_pileup_iterator_reports_base_quality_indel_and_refskip() {
+        let path =
+            std::env::temp_dir().join(format!("htslib-rs-plp-cigar-{}-in.sam", std::process::id()));
+        std::fs::write(
+            &path,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:30\n\
+             del\t0\tsq0\t1\t60\t4M2D4M\t*\t0\t0\tACGTACGT\tIIIIJJJJ\n\
+             ins\t0\tsq0\t1\t60\t4M2I4M\t*\t0\t0\tAAAACCGGGG\tIIIIKKLLLL\n\
+             skip\t0\tsq0\t1\t60\t4M3N4M\t*\t0\t0\tTTTTGGGG\tIIIIJJJJ\n",
+        )
+        .unwrap();
+
+        let columns = pileup_from_alignment_paths(std::slice::from_ref(&path))
+            .inspect(|_| {
+                let _ = std::fs::remove_file(&path);
+            })
+            .unwrap();
+
+        // Column 4 (zero-based ref index 3): last matched base before each indel.
+        let c4 = column_at(&columns, 4);
+        assert_eq!(c4.total_depth(), 3);
+        let reads = &c4.reads_by_input[0];
+
+        let del = reads.iter().find(|r| r.indel < 0).unwrap();
+        assert_eq!(del.base, Some(b'T'));
+        assert_eq!(del.quality, Some(b'I' - 33));
+        assert_eq!(del.qpos, 3);
+        assert_eq!(del.indel, -2);
+        assert!(del.insertion.is_empty());
+
+        let ins = reads.iter().find(|r| r.indel > 0).unwrap();
+        assert_eq!(ins.base, Some(b'A'));
+        assert_eq!(ins.indel, 2);
+        assert_eq!(ins.insertion, b"CC");
+
+        let plain = reads.iter().find(|r| r.indel == 0).unwrap();
+        assert_eq!(plain.base, Some(b'T'));
+        assert_eq!(plain.indel, 0);
+
+        // Column 5 (zero-based 4): deletion in `del`, refskip in `skip`.
+        let c5 = column_at(&columns, 5);
+        let c5_reads = &c5.reads_by_input[0];
+        let deleted = c5_reads.iter().find(|r| r.is_deletion).unwrap();
+        assert_eq!(deleted.base, None);
+        assert_eq!(deleted.quality, None);
+        let skipped = c5_reads.iter().find(|r| r.is_refskip).unwrap();
+        assert_eq!(skipped.base, None);
+        assert_eq!(skipped.quality, None);
+
+        // Heads at the first column, tails at the read's final aligned column.
+        let c1 = column_at(&columns, 1);
+        assert!(c1.reads_by_input[0].iter().all(|r| r.is_head));
+        let last = column_at(&columns, 10);
+        assert!(last.reads_by_input[0].iter().any(|r| r.is_tail));
+    }
+
+    #[test]
+    fn test_pileup_iterator_merges_multiple_inputs() {
+        let path =
+            std::env::temp_dir().join(format!("htslib-rs-plp-merge-{}-in.sam", std::process::id()));
+        std::fs::write(
+            &path,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:20\n\
+             a\t0\tsq0\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n",
+        )
+        .unwrap();
+
+        let columns = pileup_from_alignment_paths(&[path.clone(), path.clone()])
+            .inspect(|_| {
+                let _ = std::fs::remove_file(&path);
+            })
+            .unwrap();
+
+        assert_eq!(columns.len(), 4);
+        for column in &columns {
+            assert_eq!(column.reads_by_input.len(), 2);
+            assert_eq!(column.depth_of_input(0), 1);
+            assert_eq!(column.depth_of_input(1), 1);
+            assert_eq!(column.total_depth(), 2);
+            assert_eq!(column.reads_by_input[0], column.reads_by_input[1]);
+        }
+    }
+
+    #[test]
+    fn test_pileup_iterator_cram_matches_bam() {
+        let bam = fixture("htslib/test/range.bam");
+        let cram = fixture("htslib/test/range.cram");
+        let reference = fixture("htslib/test/ce.fa");
+
+        let from_bam = pileup_from_alignment_paths(std::slice::from_ref(&bam)).unwrap();
+        let from_cram =
+            pileup_from_alignment_paths_with_reference(std::slice::from_ref(&cram), &reference)
+                .unwrap();
+
+        assert!(!from_bam.is_empty());
+        assert_eq!(from_bam, from_cram);
     }
 }
