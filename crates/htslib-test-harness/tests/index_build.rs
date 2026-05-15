@@ -39,6 +39,36 @@ fn cleanup(paths: &[PathBuf]) {
 }
 
 #[test]
+fn builds_bai_for_bam_without_so_coordinate_header() -> Result<(), Box<dyn std::error::Error>> {
+    use htslib_rs::bam;
+    use htslib_rs::sam;
+    use htslib_rs::sam::alignment::io::Write as _;
+
+    // Coordinate-ordered records, but the @HD line carries no SO tag —
+    // upstream `samtools index` indexes such BAMs anyway.
+    let sam_text = "@HD\tVN:1.6\n\
+                    @SQ\tSN:ref0\tLN:1000\n\
+                    a\t0\tref0\t10\t60\t5M\t*\t0\t0\tACGTA\tIIIII\n\
+                    b\t0\tref0\t40\t60\t5M\t*\t0\t0\tACGTA\tIIIII\n";
+    let mut sam_reader = sam::io::Reader::new(std::io::Cursor::new(sam_text.as_bytes()));
+    let header = sam_reader.read_header()?;
+
+    let bam_path = temp_path("no-so.bam");
+    let mut writer = bam::io::Writer::new(File::create(&bam_path)?);
+    writer.write_header(&header)?;
+    for result in sam_reader.records() {
+        writer.write_alignment_record(&header, &result?)?;
+    }
+    drop(writer);
+
+    let index = build_bai(&bam_path)?;
+    cleanup(&[bam_path]);
+
+    assert_eq!(bai_reference_sequence_count(&index), 1);
+    Ok(())
+}
+
+#[test]
 fn builds_bai_for_bam_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let expected = read_bai(fixture("range.bam.bai"))?;
     let actual = build_bai(fixture("range.bam"))?;
