@@ -3104,7 +3104,7 @@ fn apply_overlap_correction(records: &mut [TestPileupRecord]) {
 }
 
 /// A single read's contribution to a pileup column (HTSlib `bam_pileup1_t`-shaped).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PileupRead {
     /// Read name, when present.
     pub name: Option<Vec<u8>>,
@@ -3135,10 +3135,17 @@ pub struct PileupRead {
     pub indel: i32,
     /// Inserted bases immediately following this column (when `indel > 0`).
     pub insertion: Vec<u8>,
+    /// Consensus Bayesian `poly_len` at this column (homopolymer run
+    /// length), from the per-read `nm_init` precompute with default
+    /// `nm_halo`/`sc_cost`.
+    pub bayes_poly: i32,
+    /// Consensus Bayesian `nm_local` at this column (local-NM score),
+    /// same precompute.
+    pub bayes_nm_local: f64,
 }
 
 /// A pileup column synchronized across one or more inputs.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PileupColumn {
     /// Reference sequence name.
     pub reference_name: String,
@@ -3374,7 +3381,11 @@ pub fn local_nm_score(local_nm: &[i32], idx: i64) -> f64 {
     }
 }
 
-fn pileup_read_from_column(record: &TestPileupRecord, column: &TestPileupColumn) -> PileupRead {
+fn pileup_read_from_column(
+    record: &TestPileupRecord,
+    column: &TestPileupColumn,
+    local_nm: &[i32],
+) -> PileupRead {
     let qpos_quality = record.quality_scores.get(column.qpos).copied().unwrap_or(0);
     let quality = if column.base.is_some() {
         record.quality_scores.get(column.qpos).copied()
@@ -3409,6 +3420,9 @@ fn pileup_read_from_column(record: &TestPileupRecord, column: &TestPileupColumn)
         is_tail: column.is_tail,
         indel,
         insertion,
+        // Upstream indexes nm[] at `pos - b->core.pos` = seq_offset+1.
+        bayes_poly: local_nm_poly(local_nm, column.qpos as i64 + 1),
+        bayes_nm_local: local_nm_score(local_nm, column.qpos as i64 + 1),
     }
 }
 
@@ -3417,11 +3431,22 @@ fn pileup_columns_from_inputs(inputs: &[Vec<TestPileupRecord>]) -> Vec<PileupCol
 
     for (input_index, records) in inputs.iter().enumerate() {
         for record in records {
+            // Per-read consensus Bayesian precompute (default nm
+            // params); reused across this record's columns.
+            let local_nm = compute_local_nm(
+                &record.sequence,
+                &record.quality_scores,
+                &record.cigar,
+                record.md.as_deref(),
+                50,
+                60,
+                false,
+            );
             for column in &record.columns {
                 let entry = sites
                     .entry((record.reference_name.clone(), column.reference_position))
                     .or_insert_with(|| vec![Vec::new(); inputs.len()]);
-                entry[input_index].push(pileup_read_from_column(record, column));
+                entry[input_index].push(pileup_read_from_column(record, column, &local_nm));
             }
         }
     }
@@ -8029,10 +8054,27 @@ mod tests {
         let cram = fixture("htslib/test/range.cram");
         let reference = fixture("htslib/test/ce.fa");
 
-        let from_bam = pileup_from_alignment_paths(std::slice::from_ref(&bam)).unwrap();
-        let from_cram =
+        let mut from_bam = pileup_from_alignment_paths(std::slice::from_ref(&bam)).unwrap();
+        let mut from_cram =
             pileup_from_alignment_paths_with_reference(std::slice::from_ref(&cram), &reference)
                 .unwrap();
+
+        // The consensus-Bayesian `bayes_*` fields derive from the `MD`
+        // tag, which CRAM regenerates and BAM carries verbatim, so they
+        // can legitimately differ by container. They are not part of
+        // "does the CRAM pileup match the BAM pileup"; normalise them.
+        let strip = |cols: &mut Vec<PileupColumn>| {
+            for c in cols {
+                for input in &mut c.reads_by_input {
+                    for r in input {
+                        r.bayes_poly = 0;
+                        r.bayes_nm_local = 0.0;
+                    }
+                }
+            }
+        };
+        strip(&mut from_bam);
+        strip(&mut from_cram);
 
         assert!(!from_bam.is_empty());
         assert_eq!(from_bam, from_cram);
