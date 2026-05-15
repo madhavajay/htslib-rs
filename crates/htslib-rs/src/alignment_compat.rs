@@ -397,6 +397,31 @@ impl AlignmentRecordSummary {
         self.mate_reference_sequence_id
     }
 
+    /// Returns the 1-based alignment start position, if any.
+    pub fn alignment_start(&self) -> Option<usize> {
+        self.alignment_start.map(usize::from)
+    }
+
+    /// Returns the 1-based mate alignment start position, if any.
+    pub fn mate_alignment_start(&self) -> Option<usize> {
+        self.mate_alignment_start.map(usize::from)
+    }
+
+    /// Returns the read name bytes (without the trailing NUL), if any.
+    pub fn name_bytes(&self) -> Option<&[u8]> {
+        self.name.as_deref()
+    }
+
+    /// Returns the ASCII sequence bytes.
+    pub fn sequence_bytes(&self) -> &[u8] {
+        &self.sequence
+    }
+
+    /// Returns the raw phred quality-score bytes.
+    pub fn quality_score_bytes(&self) -> &[u8] {
+        &self.quality_scores
+    }
+
     /// Returns the mapping quality, if any.
     pub fn mapping_quality(&self) -> Option<u8> {
         self.mapping_quality
