@@ -2951,6 +2951,12 @@ pub struct PileupOptions {
     pub require_flags: u16,
     /// Skip a record whose mapping quality is below this value.
     pub min_mapping_quality: u8,
+    /// Apply HTSlib's smart overlap removal (zero one mate's overlapping
+    /// base qualities) — HTSlib's `MPLP_SMART_OVERLAPS` default.
+    pub detect_overlaps: bool,
+    /// Discard "orphan"/anomalous reads: paired but not in a proper pair —
+    /// HTSlib mpileup's `MPLP_NO_ORPHAN` default (cleared by `-A`).
+    pub discard_orphans: bool,
 }
 
 impl Default for PileupOptions {
@@ -2959,6 +2965,115 @@ impl Default for PileupOptions {
             exclude_flags: 0x4 | 0x100 | 0x200 | 0x400,
             require_flags: 0,
             min_mapping_quality: 0,
+            detect_overlaps: true,
+            discard_orphans: false,
+        }
+    }
+}
+
+/// Ports HTSlib's `tweak_overlap_quality` / `overlap_push`: for proper-pair
+/// mates that overlap on the reference, one mate's overlapping base qualities
+/// are zeroed (and the surviving mate's boosted) so the duplicate coverage is
+/// not double-counted. Operates per input, mutating `quality_scores` in place.
+fn apply_overlap_correction(records: &mut [TestPileupRecord]) {
+    use std::collections::HashMap;
+
+    let mut groups: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+    for (i, rec) in records.iter().enumerate() {
+        let Some(name) = rec.name.as_ref() else {
+            continue;
+        };
+        // mate mapped (0x8 clear) and a proper pair (0x2 set)
+        if rec.flags & 0x8 != 0 || rec.flags & 0x2 == 0 {
+            continue;
+        }
+        if let (Some(mtid), Some(_)) = (rec.mate_reference_sequence_id, rec.mate_start) {
+            if mtid != rec.reference_sequence_id {
+                continue;
+            }
+        } else {
+            continue;
+        }
+        groups.entry(name.clone()).or_default().push(i);
+    }
+
+    for indices in groups.values() {
+        if indices.len() != 2 {
+            continue;
+        }
+        let (i, j) = (indices[0], indices[1]);
+
+        // `a` is the mate stored first (its mate lies to the right:
+        // mpos >= pos); fall back to the leftmost start.
+        let a_first = |r: &TestPileupRecord| r.mate_start.is_some_and(|m| m >= r.start);
+        let (ai, bi) = if a_first(&records[i]) && !a_first(&records[j]) {
+            (i, j)
+        } else if a_first(&records[j]) && !a_first(&records[i]) {
+            (j, i)
+        } else if records[i].start <= records[j].start {
+            (i, j)
+        } else {
+            (j, i)
+        };
+
+        // Wild-cigar guard mirrors overlap_push.
+        {
+            let b = &records[bi];
+            let b_end = b.start + b.columns.len();
+            if (b.template_length.unsigned_abs() as usize) >= 2 * b.sequence.len().max(1)
+                && b.mate_start.is_some_and(|m| m >= b_end)
+            {
+                continue;
+            }
+        }
+
+        let name = records[ai].name.clone().unwrap_or_default();
+        let modify_b = wang_hash(x31_hash_string(&name)) & 1 == 1;
+        let (amul, bmul): (u32, u32) = if modify_b { (1, 0) } else { (0, 1) };
+
+        // Shared reference positions with real bases in both mates.
+        let map_of = |r: &TestPileupRecord| {
+            r.columns
+                .iter()
+                .filter_map(|c| c.base.map(|b| (c.reference_position, (c.qpos, b))))
+                .collect::<HashMap<usize, (usize, u8)>>()
+        };
+        let a_map = map_of(&records[ai]);
+        let b_map = map_of(&records[bi]);
+
+        let mut updates: Vec<(bool, usize, u8)> = Vec::new();
+        for (refpos, &(a_qpos, a_base)) in &a_map {
+            let Some(&(b_qpos, b_base)) = b_map.get(refpos) else {
+                continue;
+            };
+            let qa = u32::from(records[ai].quality_scores.get(a_qpos).copied().unwrap_or(0));
+            let qb = u32::from(records[bi].quality_scores.get(b_qpos).copied().unwrap_or(0));
+            let (new_a, new_b): (u8, u8) = if a_base.eq_ignore_ascii_case(&b_base) {
+                let q = (qa + qb).min(200);
+                ((amul * q) as u8, (bmul * q) as u8)
+            } else if qa > qb {
+                ((qa as f64 * 0.8) as u8, 0)
+            } else if qa < qb {
+                (0, (qb as f64 * 0.8) as u8)
+            } else {
+                (
+                    (amul as f64 * 0.8 * qa as f64) as u8,
+                    (bmul as f64 * 0.8 * qb as f64) as u8,
+                )
+            };
+            updates.push((true, a_qpos, new_a));
+            updates.push((false, b_qpos, new_b));
+        }
+
+        for (is_a, qpos, value) in updates {
+            let rec = if is_a {
+                &mut records[ai]
+            } else {
+                &mut records[bi]
+            };
+            if let Some(slot) = rec.quality_scores.get_mut(qpos) {
+                *slot = value;
+            }
         }
     }
 }
@@ -3105,10 +3220,16 @@ pub fn pileup_from_alignment_paths_with_options<P>(
 where
     P: AsRef<Path>,
 {
-    let inputs = paths
+    let mut inputs = paths
         .iter()
         .map(|path| read_test_pileup_records_from_alignment_path(path, options))
         .collect::<io::Result<Vec<_>>>()?;
+
+    if options.detect_overlaps {
+        for records in &mut inputs {
+            apply_overlap_correction(records);
+        }
+    }
 
     Ok(pileup_columns_from_inputs(&inputs))
 }
@@ -3142,7 +3263,7 @@ where
     Q: AsRef<Path>,
 {
     let repository = cram_reference_repository_from_fasta_path(reference_src)?;
-    let inputs = paths
+    let mut inputs = paths
         .iter()
         .map(|path| {
             read_test_pileup_records_from_alignment_path_with_reference(
@@ -3152,6 +3273,12 @@ where
             )
         })
         .collect::<io::Result<Vec<_>>>()?;
+
+    if options.detect_overlaps {
+        for records in &mut inputs {
+            apply_overlap_correction(records);
+        }
+    }
 
     Ok(pileup_columns_from_inputs(&inputs))
 }
@@ -6035,9 +6162,14 @@ struct PileupRecord {
 struct TestPileupRecord {
     name: Option<Vec<u8>>,
     reference_name: String,
+    reference_sequence_id: usize,
     start: usize,
     mapping_quality: u8,
     is_reverse: bool,
+    flags: u16,
+    mate_reference_sequence_id: Option<usize>,
+    mate_start: Option<usize>,
+    template_length: i32,
     sequence: Vec<u8>,
     quality_scores: Vec<u8>,
     columns: Vec<TestPileupColumn>,
@@ -6081,6 +6213,11 @@ impl TestPileupRecord {
             return Ok(None);
         }
 
+        // HTSlib mpileup MPLP_NO_ORPHAN: drop paired-but-not-proper reads.
+        if options.discard_orphans && flag_bits & 0x1 != 0 && flag_bits & 0x2 == 0 {
+            return Ok(None);
+        }
+
         let Some(reference_sequence_id) = record.reference_sequence_id(header).transpose()? else {
             return Ok(None);
         };
@@ -6115,6 +6252,16 @@ impl TestPileupRecord {
             quality_scores.resize(sequence.len(), u8::MAX);
         }
 
+        // Mate info only feeds the heuristic overlap correction; never fail
+        // the whole pileup if a record's mate fields are unreadable.
+        let mate_reference_sequence_id = record
+            .mate_reference_sequence_id(header)
+            .and_then(Result::ok);
+        let mate_start = record
+            .mate_alignment_start()
+            .and_then(Result::ok)
+            .map(|p| usize::from(p) - 1);
+        let template_length = record.template_length().unwrap_or(0);
         let start = usize::from(alignment_start) - 1;
         let mut columns = test_pileup_columns(record, start, &sequence)?;
 
@@ -6129,9 +6276,14 @@ impl TestPileupRecord {
         Ok(Some(Self {
             name,
             reference_name,
+            reference_sequence_id,
             start,
             mapping_quality,
             is_reverse: flags.is_reverse_complemented(),
+            flags: flag_bits,
+            mate_reference_sequence_id,
+            mate_start,
+            template_length,
             sequence,
             quality_scores,
             columns,
@@ -7447,6 +7599,69 @@ mod tests {
         })
         .unwrap();
         assert_eq!(column_at(&cols, 1).total_depth(), 3);
+    }
+
+    #[test]
+    fn test_pileup_overlap_removal_and_orphan_filter() {
+        use super::{PileupOptions, pileup_from_alignment_paths_with_options};
+
+        let path =
+            std::env::temp_dir().join(format!("htslib-rs-plp-olap-{}-in.sam", std::process::id()));
+        // `p`: proper FR pair whose mates overlap over sq0:5-8.
+        // `o`: paired but not a proper pair (an orphan).
+        std::fs::write(
+            &path,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:50\n\
+             p\t99\tsq0\t1\t60\t8M\t=\t5\t12\tACGTACGT\tIIIIIIII\n\
+             o\t65\tsq0\t1\t60\t8M\t*\t0\t0\tACGTACGT\tIIIIIIII\n\
+             p\t147\tsq0\t5\t60\t8M\t=\t1\t-12\tACGTACGT\tIIIIIIII\n",
+        )
+        .unwrap();
+
+        // Overlap removal on (default): at sq0:5 the two `p` mates collapse —
+        // one quality zeroed, the survivor boosted to the capped sum (80).
+        let cols = pileup_from_alignment_paths_with_options(
+            std::slice::from_ref(&path),
+            &PileupOptions {
+                discard_orphans: true,
+                ..PileupOptions::default()
+            },
+        )
+        .unwrap();
+        let c5 = column_at(&cols, 5);
+        let p_reads: Vec<_> = c5.reads_by_input[0]
+            .iter()
+            .filter(|r| r.name.as_deref() == Some(b"p"))
+            .collect();
+        assert_eq!(p_reads.len(), 2);
+        let mut quals: Vec<u8> = p_reads.iter().map(|r| r.qpos_quality).collect();
+        quals.sort_unstable();
+        assert_eq!(quals, vec![0, 80]);
+        // The orphan `o` is dropped everywhere when discard_orphans is set.
+        assert!(cols.iter().all(|c| {
+            c.reads_by_input[0]
+                .iter()
+                .all(|r| r.name.as_deref() != Some(b"o"))
+        }));
+
+        // Orphan retained when discard_orphans is cleared.
+        let cols = pileup_from_alignment_paths_with_options(
+            std::slice::from_ref(&path),
+            &PileupOptions {
+                discard_orphans: false,
+                ..PileupOptions::default()
+            },
+        )
+        .inspect(|_| {
+            let _ = std::fs::remove_file(&path);
+        })
+        .unwrap();
+        assert!(cols.iter().any(|c| {
+            c.reads_by_input[0]
+                .iter()
+                .any(|r| r.name.as_deref() == Some(b"o"))
+        }));
     }
 
     #[test]
