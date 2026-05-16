@@ -5770,6 +5770,46 @@ where
     query_cram_records_all_from_path_with_reference(src, reference_src).map(Vec::into_iter)
 }
 
+/// Reads **every** record of a CRAM file with **no external reference**,
+/// using an empty FASTA repository. This decodes correctly for CRAMs
+/// built with an embedded reference (`embed_ref`), where the reference
+/// bases travel inside the container; reference-compressed CRAMs that
+/// need an external reference will error (use the
+/// `*_with_reference` variant for those).
+///
+/// Returns full [`sam::alignment::RecordBuf`] values (sequence,
+/// quality, CIGAR, aux, flags) — the non-region, no-reference
+/// complement needed by `samtools reference`'s MD path on CRAM input.
+pub fn query_cram_records_all_from_path<P>(src: P) -> io::Result<Vec<sam::alignment::RecordBuf>>
+where
+    P: AsRef<Path>,
+{
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(fasta::Repository::default())
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+
+    reader
+        .records(&header)
+        .map(|result| {
+            result.and_then(|record| {
+                sam::alignment::RecordBuf::try_from_alignment_record(&header, &record)
+            })
+        })
+        .collect()
+}
+
+/// Owning-iterator form of [`query_cram_records_all_from_path`].
+pub fn iter_cram_records_all_from_path<P>(
+    src: P,
+) -> io::Result<std::vec::IntoIter<sam::alignment::RecordBuf>>
+where
+    P: AsRef<Path>,
+{
+    query_cram_records_all_from_path(src).map(Vec::into_iter)
+}
+
 /// Counts indexed CRAM records overlapping the given regions and matching an HTSlib-style filter expression.
 pub fn count_cram_records_in_regions_matching_filter_from_path_with_reference<P, Q>(
     src: P,
@@ -8107,6 +8147,19 @@ mod tests {
             assert_eq!(c.reference_sequence_id(), b.reference_sequence_id());
             assert_eq!(c.alignment_start(), b.alignment_start());
         }
+    }
+
+    #[test]
+    fn query_cram_records_all_from_path_errors_on_reference_compressed_cram() {
+        // The no-external-reference all-record reader is for
+        // embed_ref CRAM; a reference-compressed CRAM (range.cram)
+        // must error cleanly rather than silently mis-decoding.
+        // (The positive embed_ref path is proven by the samtools-rs
+        // `reference` CRAM integration test, whose fixture is an
+        // embed_ref CRAM not shipped in htslib-rs/htslib/test.)
+        use super::query_cram_records_all_from_path;
+        let cram = fixture("htslib/test/range.cram");
+        assert!(query_cram_records_all_from_path(&cram).is_err());
     }
 
     #[test]
