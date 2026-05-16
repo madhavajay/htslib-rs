@@ -5552,10 +5552,69 @@ where
     )
 }
 
+/// As [`write_cram_from_sam_reader_with_reference`], but **embeds**
+/// each mapped slice's reference span in-container
+/// (`samtools view -O cram,embed_ref=1`) so the CRAM decodes with no
+/// external reference.
+pub fn write_cram_from_sam_reader_with_reference_embedded<R, Q, W>(
+    reader: &mut sam::io::Reader<R>,
+    reference_src: Q,
+    writer: W,
+) -> io::Result<W>
+where
+    R: BufRead,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_from_sam_reader_with_reference_repository_opts(
+        reader,
+        reference_sequence_repository,
+        writer,
+        true,
+    )
+}
+
+/// As [`write_cram_from_sam_path_with_reference`], but embeds the
+/// reference in-container (`embed_ref=1`).
+pub fn write_cram_from_sam_path_with_reference_embedded<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    writer: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let file = File::open(src)?;
+    let mut reader = sam::io::Reader::new(io::BufReader::new(file));
+    write_cram_from_sam_reader_with_reference_embedded(&mut reader, reference_src, writer)
+}
+
 fn write_cram_from_sam_reader_with_reference_repository<R, W>(
     reader: &mut sam::io::Reader<R>,
     reference_sequence_repository: fasta::Repository,
     writer: W,
+) -> io::Result<W>
+where
+    R: BufRead,
+    W: Write,
+{
+    write_cram_from_sam_reader_with_reference_repository_opts(
+        reader,
+        reference_sequence_repository,
+        writer,
+        false,
+    )
+}
+
+fn write_cram_from_sam_reader_with_reference_repository_opts<R, W>(
+    reader: &mut sam::io::Reader<R>,
+    reference_sequence_repository: fasta::Repository,
+    writer: W,
+    embed_reference: bool,
 ) -> io::Result<W>
 where
     R: BufRead,
@@ -5566,6 +5625,7 @@ where
     let header = reader.read_header()?;
     let mut writer = cram::io::writer::Builder::default()
         .set_reference_sequence_repository(reference_sequence_repository)
+        .set_embed_reference(embed_reference)
         .build_from_writer(writer);
 
     writer.write_header(&header)?;
