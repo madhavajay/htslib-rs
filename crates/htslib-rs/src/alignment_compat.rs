@@ -4032,6 +4032,41 @@ where
     Ok(writer.into_inner().into_inner())
 }
 
+/// Copies a BAM file to BAM output, but first rewrites the **header
+/// text** through `transform` (header serialized to SAM text, the
+/// callback returns the replacement text, which is parsed back). Used
+/// for binary `@PG` insertion on BAM-input → BAM-output paths where
+/// the records stay binary. Record bodies are streamed unchanged.
+pub fn write_bam_from_path_transforming_header<P, W, F>(
+    src: P,
+    dst: W,
+    transform: F,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    W: Write,
+    F: FnOnce(&str) -> io::Result<String>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let header = reader.read_header()?;
+
+    let mut header_writer = sam::io::Writer::new(Vec::new());
+    header_writer.write_header(&header)?;
+    let header_text = String::from_utf8(header_writer.into_inner())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let new_text = transform(&header_text)?;
+    let new_header = sam::io::Reader::new(io::Cursor::new(new_text.into_bytes())).read_header()?;
+
+    let mut writer = bam::io::Writer::new(dst);
+    writer.write_header(&new_header)?;
+    for result in reader.records() {
+        let record = result?;
+        writer.write_record(&new_header, &record)?;
+    }
+    writer.try_finish()?;
+    Ok(writer.into_inner().into_inner())
+}
+
 /// Writes BAM input records matching an HTSlib-style filter expression to BAM output.
 pub fn write_bam_matching_filter_from_path<P, W>(src: P, filter: &str, dst: W) -> io::Result<W>
 where
@@ -8118,6 +8153,39 @@ mod tests {
             // not synthesize it on decode, so it is recomputed by callers
             // (e.g. stats/reference) rather than asserted here.
         }
+    }
+
+    #[test]
+    fn write_bam_from_path_transforming_header_rewrites_header_keeps_records() {
+        use super::{summarize_bam_records_from_path, write_bam_from_path_transforming_header};
+        let bam = fixture("htslib/test/range.bam");
+        let dir = std::env::temp_dir().join(format!("htslib-rs-bamhdr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("out.bam");
+
+        let dst = std::fs::File::create(&out).unwrap();
+        write_bam_from_path_transforming_header(&bam, dst, |text| {
+            // Append a @PG-shaped line before the first non-@ line.
+            Ok(format!("{text}@PG\tID:probe\tPN:probe\n"))
+        })
+        .unwrap();
+
+        let before = summarize_bam_records_from_path(&bam).unwrap();
+        let after = summarize_bam_records_from_path(&out).unwrap();
+        assert_eq!(before.len(), after.len());
+        for (a, b) in before.iter().zip(&after) {
+            assert_eq!(a.flags_u16(), b.flags_u16());
+            assert_eq!(a.reference_sequence_id(), b.reference_sequence_id());
+            assert_eq!(a.alignment_start(), b.alignment_start());
+        }
+        let hdr = read_bam_header_from_path(&out).unwrap();
+        assert!(
+            hdr.programs().as_ref().keys().any(|k| {
+                let id: &[u8] = k.as_ref();
+                id == b"probe"
+            }),
+            "transformed header must carry the injected @PG"
+        );
     }
 
     #[test]
