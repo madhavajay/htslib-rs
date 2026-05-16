@@ -397,6 +397,31 @@ impl AlignmentRecordSummary {
         self.mate_reference_sequence_id
     }
 
+    /// Returns the 1-based alignment start position, if any.
+    pub fn alignment_start(&self) -> Option<usize> {
+        self.alignment_start.map(usize::from)
+    }
+
+    /// Returns the 1-based mate alignment start position, if any.
+    pub fn mate_alignment_start(&self) -> Option<usize> {
+        self.mate_alignment_start.map(usize::from)
+    }
+
+    /// Returns the read name bytes (without the trailing NUL), if any.
+    pub fn name_bytes(&self) -> Option<&[u8]> {
+        self.name.as_deref()
+    }
+
+    /// Returns the ASCII sequence bytes.
+    pub fn sequence_bytes(&self) -> &[u8] {
+        &self.sequence
+    }
+
+    /// Returns the raw phred quality-score bytes.
+    pub fn quality_score_bytes(&self) -> &[u8] {
+        &self.quality_scores
+    }
+
     /// Returns the mapping quality, if any.
     pub fn mapping_quality(&self) -> Option<u8> {
         self.mapping_quality
@@ -2882,9 +2907,10 @@ pub fn synchronized_pileup_from_alignment_paths<P>(
 where
     P: AsRef<Path>,
 {
+    let options = PileupOptions::default();
     let inputs = paths
         .iter()
-        .map(read_test_pileup_records_from_alignment_path)
+        .map(|path| read_test_pileup_records_from_alignment_path(path, &options))
         .collect::<io::Result<Vec<_>>>()?;
     let mut sites: BTreeMap<SynchronizedPileupSite, Vec<SynchronizedPileupEntry>> = BTreeMap::new();
 
@@ -2938,7 +2964,636 @@ where
         .collect()
 }
 
-fn read_test_pileup_records_from_alignment_path<P>(src: P) -> io::Result<Vec<TestPileupRecord>>
+/// Record-selection options for the pileup iterators.
+///
+/// `Default` mirrors HTSlib's pileup default: exclude unmapped (`0x4`),
+/// secondary (`0x100`), QC-fail (`0x200`) and duplicate (`0x400`) records.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PileupOptions {
+    /// Skip a record if it has any of these flag bits set.
+    pub exclude_flags: u16,
+    /// Skip a record unless it has all of these flag bits set.
+    pub require_flags: u16,
+    /// Skip a record whose mapping quality is below this value.
+    pub min_mapping_quality: u8,
+    /// Apply HTSlib's smart overlap removal (zero one mate's overlapping
+    /// base qualities) — HTSlib's `MPLP_SMART_OVERLAPS` default.
+    pub detect_overlaps: bool,
+    /// Discard "orphan"/anomalous reads: paired but not in a proper pair —
+    /// HTSlib mpileup's `MPLP_NO_ORPHAN` default (cleared by `-A`).
+    pub discard_orphans: bool,
+}
+
+impl Default for PileupOptions {
+    fn default() -> Self {
+        Self {
+            exclude_flags: 0x4 | 0x100 | 0x200 | 0x400,
+            require_flags: 0,
+            min_mapping_quality: 0,
+            detect_overlaps: true,
+            discard_orphans: false,
+        }
+    }
+}
+
+/// Ports HTSlib's `tweak_overlap_quality` / `overlap_push`: for proper-pair
+/// mates that overlap on the reference, one mate's overlapping base qualities
+/// are zeroed (and the surviving mate's boosted) so the duplicate coverage is
+/// not double-counted. Operates per input, mutating `quality_scores` in place.
+fn apply_overlap_correction(records: &mut [TestPileupRecord]) {
+    use std::collections::HashMap;
+
+    let mut groups: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+    for (i, rec) in records.iter().enumerate() {
+        let Some(name) = rec.name.as_ref() else {
+            continue;
+        };
+        // mate mapped (0x8 clear) and a proper pair (0x2 set)
+        if rec.flags & 0x8 != 0 || rec.flags & 0x2 == 0 {
+            continue;
+        }
+        if let (Some(mtid), Some(_)) = (rec.mate_reference_sequence_id, rec.mate_start) {
+            if mtid != rec.reference_sequence_id {
+                continue;
+            }
+        } else {
+            continue;
+        }
+        groups.entry(name.clone()).or_default().push(i);
+    }
+
+    for indices in groups.values() {
+        if indices.len() != 2 {
+            continue;
+        }
+        let (i, j) = (indices[0], indices[1]);
+
+        // `a` is the mate stored first (its mate lies to the right:
+        // mpos >= pos); fall back to the leftmost start.
+        let a_first = |r: &TestPileupRecord| r.mate_start.is_some_and(|m| m >= r.start);
+        let (ai, bi) = if a_first(&records[i]) && !a_first(&records[j]) {
+            (i, j)
+        } else if a_first(&records[j]) && !a_first(&records[i]) {
+            (j, i)
+        } else if records[i].start <= records[j].start {
+            (i, j)
+        } else {
+            (j, i)
+        };
+
+        // Wild-cigar guard mirrors overlap_push.
+        {
+            let b = &records[bi];
+            let b_end = b.start + b.columns.len();
+            if (b.template_length.unsigned_abs() as usize) >= 2 * b.sequence.len().max(1)
+                && b.mate_start.is_some_and(|m| m >= b_end)
+            {
+                continue;
+            }
+        }
+
+        let name = records[ai].name.clone().unwrap_or_default();
+        let modify_b = wang_hash(x31_hash_string(&name)) & 1 == 1;
+        let (amul, bmul): (u32, u32) = if modify_b { (1, 0) } else { (0, 1) };
+
+        // Shared reference positions with real bases in both mates.
+        let map_of = |r: &TestPileupRecord| {
+            r.columns
+                .iter()
+                .filter_map(|c| c.base.map(|b| (c.reference_position, (c.qpos, b))))
+                .collect::<HashMap<usize, (usize, u8)>>()
+        };
+        let a_map = map_of(&records[ai]);
+        let b_map = map_of(&records[bi]);
+
+        let mut updates: Vec<(bool, usize, u8)> = Vec::new();
+        for (refpos, &(a_qpos, a_base)) in &a_map {
+            let Some(&(b_qpos, b_base)) = b_map.get(refpos) else {
+                continue;
+            };
+            let qa = u32::from(records[ai].quality_scores.get(a_qpos).copied().unwrap_or(0));
+            let qb = u32::from(records[bi].quality_scores.get(b_qpos).copied().unwrap_or(0));
+            let (new_a, new_b): (u8, u8) = if a_base.eq_ignore_ascii_case(&b_base) {
+                let q = (qa + qb).min(200);
+                ((amul * q) as u8, (bmul * q) as u8)
+            } else if qa > qb {
+                ((qa as f64 * 0.8) as u8, 0)
+            } else if qa < qb {
+                (0, (qb as f64 * 0.8) as u8)
+            } else {
+                (
+                    (amul as f64 * 0.8 * qa as f64) as u8,
+                    (bmul as f64 * 0.8 * qb as f64) as u8,
+                )
+            };
+            updates.push((true, a_qpos, new_a));
+            updates.push((false, b_qpos, new_b));
+        }
+
+        for (is_a, qpos, value) in updates {
+            let rec = if is_a {
+                &mut records[ai]
+            } else {
+                &mut records[bi]
+            };
+            if let Some(slot) = rec.quality_scores.get_mut(qpos) {
+                *slot = value;
+            }
+        }
+    }
+}
+
+/// A single read's contribution to a pileup column (HTSlib `bam_pileup1_t`-shaped).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PileupRead {
+    /// Read name, when present.
+    pub name: Option<Vec<u8>>,
+    /// Mapping quality (255 when unavailable).
+    pub mapping_quality: u8,
+    /// Whether the read is reverse-complemented.
+    pub is_reverse: bool,
+    /// Query base at this column; `None` for a deletion or reference skip.
+    pub base: Option<u8>,
+    /// Base quality (Phred) at this column; `None` for a deletion or reference skip.
+    pub quality: Option<u8>,
+    /// Raw read quality at `qpos` regardless of deletion/refskip (`0` when
+    /// `qpos` is past the sequence). Mirrors HTSlib's
+    /// `qpos < l_qseq ? qual[qpos] : 0` used by mpileup's base-quality gate.
+    pub qpos_quality: u8,
+    /// 0-based offset into the read sequence aligned at this column.
+    pub qpos: usize,
+    /// This column is a deletion in the read (CIGAR `D`).
+    pub is_deletion: bool,
+    /// This column is a reference skip in the read (CIGAR `N`).
+    pub is_refskip: bool,
+    /// This is the first aligned column of the read.
+    pub is_head: bool,
+    /// This is the last aligned column of the read.
+    pub is_tail: bool,
+    /// Indel immediately following this column: `>0` insertion length, `<0`
+    /// deletion length, `0` none (HTSlib `bam_pileup1_t::indel`).
+    pub indel: i32,
+    /// Inserted bases immediately following this column (when `indel > 0`).
+    pub insertion: Vec<u8>,
+    /// Consensus Bayesian `poly_len` at this column (homopolymer run
+    /// length), from the per-read `nm_init` precompute with default
+    /// `nm_halo`/`sc_cost`.
+    pub bayes_poly: i32,
+    /// Consensus Bayesian `nm_local` at this column (local-NM score),
+    /// same precompute.
+    pub bayes_nm_local: f64,
+}
+
+/// A pileup column synchronized across one or more inputs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PileupColumn {
+    /// Reference sequence name.
+    pub reference_name: String,
+    /// 1-based reference position.
+    pub position: usize,
+    /// Reads overlapping this column, grouped by input in argument order.
+    pub reads_by_input: Vec<Vec<PileupRead>>,
+}
+
+impl PileupColumn {
+    /// Total depth across all inputs at this column.
+    pub fn total_depth(&self) -> usize {
+        self.reads_by_input.iter().map(Vec::len).sum()
+    }
+
+    /// Depth contributed by a single input index.
+    pub fn depth_of_input(&self, input_index: usize) -> usize {
+        self.reads_by_input.get(input_index).map_or(0, Vec::len)
+    }
+}
+
+/// Faithful port of `samtools/bam_consensus.c` `nm_init`'s per-read
+/// precompute (default options: `adj_qual` on, `homopoly_fix` off,
+/// non-`BAYES_116`). Produces the packed `local_nm` array: high 8 bits
+/// = homopolymer run length, low 24 bits = local-NM score. `seq` is
+/// ASCII bases, `qual` Phred, `cigar` as `(bam_op,len)`, `md` the MD
+/// aux bytes. `poly_len`/`nm_local` index this array.
+///
+/// `homopoly_fix` (opt-in, no test fixtures) is not modelled.
+#[allow(clippy::needless_range_loop)]
+pub fn compute_local_nm(
+    seq: &[u8],
+    qual: &[u8],
+    cigar: &[(u8, usize)],
+    md: Option<&[u8]>,
+    nm_halo: i64,
+    sc_cost: i32,
+    mode_bayes116: bool,
+) -> Vec<i32> {
+    let qlen = seq.len();
+    let mut local_nm = vec![0i32; qlen];
+    if qlen == 0 {
+        return local_nm;
+    }
+    let q = |i: usize| qual.get(i).copied().unwrap_or(0) as i32;
+    let poly_adj = 1.0f64; // homopoly_fix off
+
+    // --- adj_qual: accumulate the local quality-deficit into local_nm
+    let qhalo = 8usize;
+    let qhalop = 2usize;
+    let mut qmin = q(0);
+    let mut qminp = q(0);
+    let base0 = seq[0];
+    for i in 1..qlen {
+        if seq[i] != base0 {
+            break;
+        }
+        if i < qhalop && qminp > q(i) {
+            qminp = q(i);
+        }
+    }
+    let mut i = 0usize;
+    while i < qlen && i < qhalo {
+        if qmin > q(i) {
+            qmin = q(i);
+        }
+        i += 1;
+    }
+    while i + qhalo < qlen {
+        // homopoly_fix off => polyl == polyr == 0, pl == 0
+        let t = if mode_bayes116 {
+            (q(i) + 5 * qmin) / 4
+        } else {
+            q(i) / 3 + (qminp as f64 * poly_adj) as i32
+        };
+        if t < q(i) {
+            local_nm[i] += q(i) - t;
+        }
+        qminp = q(i);
+        // inner k-loop over [max(0,i-qhalop)..=min(0,i+qhalop)] is empty
+        // for i>qhalop (polyl=polyr=0), matching upstream.
+        if qmin > q(i + qhalo) {
+            qmin = q(i + qhalo);
+        } else if qmin <= q(i - qhalo) {
+            qmin = 99;
+            for j in (i - qhalo + 1)..=(i + qhalo) {
+                if qmin > q(j) {
+                    qmin = q(j);
+                }
+            }
+        }
+        i += 1;
+    }
+    while i < qlen {
+        let t = if mode_bayes116 {
+            (q(i) + 5 * qmin) / 4
+        } else {
+            q(i) / 3 + (qminp as f64 * poly_adj) as i32
+        };
+        if t < q(i) {
+            local_nm[i] += q(i) - t;
+        }
+        i += 1;
+    }
+
+    // --- homopolymer run length into the high 8 bits
+    let mut i = 0usize;
+    while i < qlen {
+        let b = seq[i];
+        let mut j = i + 1;
+        while j < qlen && seq[j] == b {
+            j += 1;
+        }
+        let mut poly = (j - i - 1) as i32;
+        if poly > 100 {
+            poly = 100;
+        }
+        // HALO == 0 => k in [i, j)
+        for k in i..j {
+            let cur = local_nm[k];
+            local_nm[k] = (poly.max(cur >> 24) << 24) | (cur & ((1 << 24) - 1));
+        }
+        i = j;
+    }
+
+    // --- soft-clip cost at the read ends
+    let is_sc = |idx: usize| -> bool {
+        cigar
+            .get(idx)
+            .map(|&(op, _)| {
+                op == 4 // S
+                    || (op == 5 // H then S
+                        && cigar.len() > 1
+                        && cigar.get(idx + 1).is_some_and(|&(o, _)| o == 4))
+            })
+            .unwrap_or(false)
+    };
+    let halo = nm_halo;
+    if !cigar.is_empty() && (cigar[0].0 == 4 || is_sc(0)) {
+        let mut k = 0i64;
+        while k < halo && (k as usize) < qlen {
+            local_nm[k as usize] += sc_cost;
+            k += 1;
+        }
+        while k < halo * 2 && (k as usize) < qlen {
+            local_nm[k as usize] += sc_cost >> 1;
+            k += 1;
+        }
+    }
+    let last = cigar.len().wrapping_sub(1);
+    let tail_sc = !cigar.is_empty()
+        && (cigar[last].0 == 4
+            || (cigar[last].0 == 5 && cigar.len() > 1 && cigar[last - 1].0 == 4));
+    if tail_sc {
+        let mut k = qlen as i64 - 1;
+        while k >= qlen as i64 - halo && k >= 0 {
+            local_nm[k as usize] += sc_cost;
+            k -= 1;
+        }
+        while k >= qlen as i64 - halo * 2 && k >= 0 {
+            local_nm[k as usize] += sc_cost >> 1;
+            k -= 1;
+        }
+    }
+
+    // --- MD walk: haloed mismatch cost (upstream does NOT advance `pos`
+    // past the mismatch base; deletions `^...` are skipped).
+    if let Some(md) = md {
+        let mut pos: i64 = 0;
+        let mut p = 0usize;
+        while p < md.len() {
+            let c = md[p];
+            if c.is_ascii_digit() {
+                let mut n: i64 = 0;
+                while p < md.len() && md[p].is_ascii_digit() {
+                    n = n * 10 + (md[p] - b'0') as i64;
+                    p += 1;
+                }
+                pos += n;
+                continue;
+            }
+            if c == b'^' {
+                p += 1;
+                while p < md.len() && !md[p].is_ascii_digit() {
+                    p += 1;
+                }
+                continue;
+            }
+            let h = halo;
+            let mut k = if pos - h * 2 >= 0 { pos - h * 2 } else { 0 };
+            while k < pos - h && (k as usize) < qlen {
+                local_nm[k as usize] += 5;
+                k += 1;
+            }
+            while k < pos + h && (k as usize) < qlen {
+                local_nm[k as usize] += 10;
+                k += 1;
+            }
+            while k < pos + h * 2 && (k as usize) < qlen {
+                local_nm[k as usize] += 5;
+                k += 1;
+            }
+            p += 1;
+        }
+    }
+
+    local_nm
+}
+
+/// `poly_len(pos)` / `nm_local(pos)` over a precomputed `local_nm`,
+/// where `idx` is the upstream `pos - b->core.pos` (= `seq_offset+1`).
+pub fn local_nm_poly(local_nm: &[i32], idx: i64) -> i32 {
+    if idx >= 0 && (idx as usize) < local_nm.len() {
+        local_nm[idx as usize] >> 24
+    } else {
+        0
+    }
+}
+
+pub fn local_nm_score(local_nm: &[i32], idx: i64) -> f64 {
+    if local_nm.is_empty() {
+        return 0.0;
+    }
+    let mask = (1 << 24) - 1;
+    if idx < 0 {
+        (local_nm[0] & mask) as f64
+    } else if idx as usize >= local_nm.len() {
+        (local_nm[local_nm.len() - 1] & mask) as f64
+    } else {
+        (local_nm[idx as usize] & mask) as f64 / 10.0
+    }
+}
+
+fn pileup_read_from_column(
+    record: &TestPileupRecord,
+    column: &TestPileupColumn,
+    local_nm: &[i32],
+) -> PileupRead {
+    let qpos_quality = record.quality_scores.get(column.qpos).copied().unwrap_or(0);
+    let quality = if column.base.is_some() {
+        record.quality_scores.get(column.qpos).copied()
+    } else {
+        None
+    };
+    let (indel, insertion) = if !column.insertion_after.is_empty() {
+        (
+            i32::try_from(column.insertion_after.len()).unwrap_or(i32::MAX),
+            column.insertion_after.clone(),
+        )
+    } else if column.deletion_after > 0 {
+        (
+            -i32::try_from(column.deletion_after).unwrap_or(i32::MAX),
+            Vec::new(),
+        )
+    } else {
+        (0, Vec::new())
+    };
+
+    PileupRead {
+        name: record.name.clone(),
+        mapping_quality: record.mapping_quality,
+        is_reverse: record.is_reverse,
+        base: column.base,
+        quality,
+        qpos_quality,
+        qpos: column.qpos,
+        is_deletion: column.is_deletion,
+        is_refskip: column.is_refskip,
+        is_head: column.is_head,
+        is_tail: column.is_tail,
+        indel,
+        insertion,
+        // Upstream indexes nm[] at `pos - b->core.pos` = seq_offset+1.
+        bayes_poly: local_nm_poly(local_nm, column.qpos as i64 + 1),
+        bayes_nm_local: local_nm_score(local_nm, column.qpos as i64 + 1),
+    }
+}
+
+fn pileup_columns_from_inputs(inputs: &[Vec<TestPileupRecord>]) -> Vec<PileupColumn> {
+    let mut sites: BTreeMap<(String, usize), Vec<Vec<PileupRead>>> = BTreeMap::new();
+
+    for (input_index, records) in inputs.iter().enumerate() {
+        for record in records {
+            // Per-read consensus Bayesian precompute (default nm
+            // params); reused across this record's columns.
+            let local_nm = compute_local_nm(
+                &record.sequence,
+                &record.quality_scores,
+                &record.cigar,
+                record.md.as_deref(),
+                50,
+                60,
+                false,
+            );
+            for column in &record.columns {
+                let entry = sites
+                    .entry((record.reference_name.clone(), column.reference_position))
+                    .or_insert_with(|| vec![Vec::new(); inputs.len()]);
+                entry[input_index].push(pileup_read_from_column(record, column, &local_nm));
+            }
+        }
+    }
+
+    sites
+        .into_iter()
+        .map(
+            |((reference_name, zero_based_position), reads_by_input)| PileupColumn {
+                reference_name,
+                position: zero_based_position + 1,
+                reads_by_input,
+            },
+        )
+        .collect()
+}
+
+/// Builds synchronized pileup columns across multiple SAM/BAM inputs.
+///
+/// Each column reports, per input, the [`PileupRead`] entries overlapping a
+/// reference position (HTSlib `bam_plp`/`sam_pileup`-shaped). Unmapped,
+/// secondary, QC-fail and duplicate records are excluded, matching HTSlib's
+/// default pileup behavior.
+pub fn pileup_from_alignment_paths<P>(paths: &[P]) -> io::Result<Vec<PileupColumn>>
+where
+    P: AsRef<Path>,
+{
+    pileup_from_alignment_paths_with_options(paths, &PileupOptions::default())
+}
+
+/// Like [`pileup_from_alignment_paths`] with explicit record-selection options.
+pub fn pileup_from_alignment_paths_with_options<P>(
+    paths: &[P],
+    options: &PileupOptions,
+) -> io::Result<Vec<PileupColumn>>
+where
+    P: AsRef<Path>,
+{
+    let mut inputs = paths
+        .iter()
+        .map(|path| read_test_pileup_records_from_alignment_path(path, options))
+        .collect::<io::Result<Vec<_>>>()?;
+
+    if options.detect_overlaps {
+        for records in &mut inputs {
+            apply_overlap_correction(records);
+        }
+    }
+
+    Ok(pileup_columns_from_inputs(&inputs))
+}
+
+/// Like [`pileup_from_alignment_paths`] but also accepts CRAM inputs, decoding
+/// them against the supplied FASTA reference.
+pub fn pileup_from_alignment_paths_with_reference<P, Q>(
+    paths: &[P],
+    reference_src: Q,
+) -> io::Result<Vec<PileupColumn>>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    pileup_from_alignment_paths_with_reference_and_options(
+        paths,
+        reference_src,
+        &PileupOptions::default(),
+    )
+}
+
+/// Like [`pileup_from_alignment_paths_with_reference`] with explicit
+/// record-selection options.
+pub fn pileup_from_alignment_paths_with_reference_and_options<P, Q>(
+    paths: &[P],
+    reference_src: Q,
+    options: &PileupOptions,
+) -> io::Result<Vec<PileupColumn>>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let mut inputs = paths
+        .iter()
+        .map(|path| {
+            read_test_pileup_records_from_alignment_path_with_reference(
+                path,
+                repository.clone(),
+                options,
+            )
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+
+    if options.detect_overlaps {
+        for records in &mut inputs {
+            apply_overlap_correction(records);
+        }
+    }
+
+    Ok(pileup_columns_from_inputs(&inputs))
+}
+
+/// Iterator form of [`pileup_from_alignment_paths`].
+pub fn iter_pileup_from_alignment_paths<P>(
+    paths: &[P],
+) -> io::Result<std::vec::IntoIter<PileupColumn>>
+where
+    P: AsRef<Path>,
+{
+    pileup_from_alignment_paths(paths).map(|columns| columns.into_iter())
+}
+
+fn read_test_pileup_records_from_alignment_path_with_reference<P>(
+    src: P,
+    reference_sequence_repository: fasta::Repository,
+    options: &PileupOptions,
+) -> io::Result<Vec<TestPileupRecord>>
+where
+    P: AsRef<Path>,
+{
+    let src = src.as_ref();
+    if src
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cram"))
+    {
+        let data_path = associated_data_path(src);
+        let mut reader = cram::io::reader::Builder::default()
+            .set_reference_sequence_repository(reference_sequence_repository)
+            .build_from_path(data_path)?;
+        let header = reader.read_header()?;
+        let mut records = Vec::new();
+
+        for result in reader.records(&header) {
+            let record = result?;
+            if let Some(record) =
+                TestPileupRecord::try_from_record_with_options(&header, &record, options)?
+            {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    } else {
+        read_test_pileup_records_from_alignment_path(src, options)
+    }
+}
+
+fn read_test_pileup_records_from_alignment_path<P>(
+    src: P,
+    options: &PileupOptions,
+) -> io::Result<Vec<TestPileupRecord>>
 where
     P: AsRef<Path>,
 {
@@ -2953,7 +3608,9 @@ where
 
         for result in reader.records() {
             let record = result?;
-            if let Some(record) = TestPileupRecord::try_from_record(&header, &record)? {
+            if let Some(record) =
+                TestPileupRecord::try_from_record_with_options(&header, &record, options)?
+            {
                 records.push(record);
             }
         }
@@ -2968,7 +3625,9 @@ where
 
         for result in reader.records() {
             let record = result?;
-            if let Some(record) = TestPileupRecord::try_from_record(&header, &record)? {
+            if let Some(record) =
+                TestPileupRecord::try_from_record_with_options(&header, &record, options)?
+            {
                 records.push(record);
             }
         }
@@ -3370,6 +4029,41 @@ where
 
     writer.try_finish()?;
 
+    Ok(writer.into_inner().into_inner())
+}
+
+/// Copies a BAM file to BAM output, but first rewrites the **header
+/// text** through `transform` (header serialized to SAM text, the
+/// callback returns the replacement text, which is parsed back). Used
+/// for binary `@PG` insertion on BAM-input → BAM-output paths where
+/// the records stay binary. Record bodies are streamed unchanged.
+pub fn write_bam_from_path_transforming_header<P, W, F>(
+    src: P,
+    dst: W,
+    transform: F,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    W: Write,
+    F: FnOnce(&str) -> io::Result<String>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let header = reader.read_header()?;
+
+    let mut header_writer = sam::io::Writer::new(Vec::new());
+    header_writer.write_header(&header)?;
+    let header_text = String::from_utf8(header_writer.into_inner())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let new_text = transform(&header_text)?;
+    let new_header = sam::io::Reader::new(io::Cursor::new(new_text.into_bytes())).read_header()?;
+
+    let mut writer = bam::io::Writer::new(dst);
+    writer.write_header(&new_header)?;
+    for result in reader.records() {
+        let record = result?;
+        writer.write_record(&new_header, &record)?;
+    }
+    writer.try_finish()?;
     Ok(writer.into_inner().into_inner())
 }
 
@@ -4269,6 +4963,40 @@ where
     summarize_cram_records_from_path_with_reference_repository(src, reference_sequence_repository)
 }
 
+/// Reads CRAM records into summaries **without an external reference**,
+/// by synthesizing an all-`N` repository sized from the CRAM header's
+/// `@SQ` lines.
+///
+/// CRAM stores each record's BAM flags, reference id, position, mapping
+/// quality and read name in core/external data series independently of
+/// the reference; only the *sequence* (and NM/MD-derived values) is
+/// reconstructed against it. So for consumers that only need those
+/// reference-independent fields — `idxstats`, `flagstat` — a synthetic
+/// reference yields byte-identical counts while letting the noodles
+/// CRAM decoder run without erroring on a missing reference. (The
+/// decoded `sequence` bytes are *not* meaningful with this path.)
+pub fn summarize_cram_records_from_path_synthesizing_reference<P>(
+    src: P,
+) -> io::Result<Vec<AlignmentRecordSummary>>
+where
+    P: AsRef<Path>,
+{
+    let data_path = associated_data_path(&src);
+    let header = read_cram_header_from_path(&data_path)?;
+    let records: Vec<fasta::Record> = header
+        .reference_sequences()
+        .iter()
+        .map(|(name, reference_sequence)| {
+            let len = usize::from(reference_sequence.length());
+            let definition = fasta::record::Definition::new(name.clone(), None);
+            let sequence = fasta::record::Sequence::from(vec![b'N'; len]);
+            fasta::Record::new(definition, sequence)
+        })
+        .collect();
+    let repository = fasta::Repository::new(records);
+    summarize_cram_records_from_path_with_reference_repository(src, repository)
+}
+
 /// Reads CRAM input without producing output and returns the number of records seen.
 pub fn benchmark_cram_view_from_path_with_reference<P, Q>(
     src: P,
@@ -4824,10 +5552,69 @@ where
     )
 }
 
+/// As [`write_cram_from_sam_reader_with_reference`], but **embeds**
+/// each mapped slice's reference span in-container
+/// (`samtools view -O cram,embed_ref=1`) so the CRAM decodes with no
+/// external reference.
+pub fn write_cram_from_sam_reader_with_reference_embedded<R, Q, W>(
+    reader: &mut sam::io::Reader<R>,
+    reference_src: Q,
+    writer: W,
+) -> io::Result<W>
+where
+    R: BufRead,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_from_sam_reader_with_reference_repository_opts(
+        reader,
+        reference_sequence_repository,
+        writer,
+        true,
+    )
+}
+
+/// As [`write_cram_from_sam_path_with_reference`], but embeds the
+/// reference in-container (`embed_ref=1`).
+pub fn write_cram_from_sam_path_with_reference_embedded<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    writer: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let file = File::open(src)?;
+    let mut reader = sam::io::Reader::new(io::BufReader::new(file));
+    write_cram_from_sam_reader_with_reference_embedded(&mut reader, reference_src, writer)
+}
+
 fn write_cram_from_sam_reader_with_reference_repository<R, W>(
     reader: &mut sam::io::Reader<R>,
     reference_sequence_repository: fasta::Repository,
     writer: W,
+) -> io::Result<W>
+where
+    R: BufRead,
+    W: Write,
+{
+    write_cram_from_sam_reader_with_reference_repository_opts(
+        reader,
+        reference_sequence_repository,
+        writer,
+        false,
+    )
+}
+
+fn write_cram_from_sam_reader_with_reference_repository_opts<R, W>(
+    reader: &mut sam::io::Reader<R>,
+    reference_sequence_repository: fasta::Repository,
+    writer: W,
+    embed_reference: bool,
 ) -> io::Result<W>
 where
     R: BufRead,
@@ -4838,6 +5625,7 @@ where
     let header = reader.read_header()?;
     let mut writer = cram::io::writer::Builder::default()
         .set_reference_sequence_repository(reference_sequence_repository)
+        .set_embed_reference(embed_reference)
         .build_from_writer(writer);
 
     writer.write_header(&header)?;
@@ -5031,6 +5819,90 @@ where
     Q: AsRef<Path>,
 {
     query_cram_records_from_path_with_reference(src, region, reference_src).map(Vec::into_iter)
+}
+
+/// Reads **every** record of a CRAM file (no region/index required), decoding
+/// against a FASTA reference and returning owned [`sam::alignment::RecordBuf`]
+/// values with full sequence/quality/aux/flags preserved.
+///
+/// This is the non-region complement of
+/// [`query_cram_records_from_path_with_reference`]; the `summarize_*` path
+/// only yields coordinate summaries and discards per-record sequence/quality.
+pub fn query_cram_records_all_from_path_with_reference<P, Q>(
+    src: P,
+    reference_src: Q,
+) -> io::Result<Vec<sam::alignment::RecordBuf>>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+
+    reader
+        .records(&header)
+        .map(|result| {
+            result.and_then(|record| {
+                sam::alignment::RecordBuf::try_from_alignment_record(&header, &record)
+            })
+        })
+        .collect()
+}
+
+/// Owning-iterator form of [`query_cram_records_all_from_path_with_reference`].
+pub fn iter_cram_records_all_from_path_with_reference<P, Q>(
+    src: P,
+    reference_src: Q,
+) -> io::Result<std::vec::IntoIter<sam::alignment::RecordBuf>>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    query_cram_records_all_from_path_with_reference(src, reference_src).map(Vec::into_iter)
+}
+
+/// Reads **every** record of a CRAM file with **no external reference**,
+/// using an empty FASTA repository. This decodes correctly for CRAMs
+/// built with an embedded reference (`embed_ref`), where the reference
+/// bases travel inside the container; reference-compressed CRAMs that
+/// need an external reference will error (use the
+/// `*_with_reference` variant for those).
+///
+/// Returns full [`sam::alignment::RecordBuf`] values (sequence,
+/// quality, CIGAR, aux, flags) — the non-region, no-reference
+/// complement needed by `samtools reference`'s MD path on CRAM input.
+pub fn query_cram_records_all_from_path<P>(src: P) -> io::Result<Vec<sam::alignment::RecordBuf>>
+where
+    P: AsRef<Path>,
+{
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(fasta::Repository::default())
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+
+    reader
+        .records(&header)
+        .map(|result| {
+            result.and_then(|record| {
+                sam::alignment::RecordBuf::try_from_alignment_record(&header, &record)
+            })
+        })
+        .collect()
+}
+
+/// Owning-iterator form of [`query_cram_records_all_from_path`].
+pub fn iter_cram_records_all_from_path<P>(
+    src: P,
+) -> io::Result<std::vec::IntoIter<sam::alignment::RecordBuf>>
+where
+    P: AsRef<Path>,
+{
+    query_cram_records_all_from_path(src).map(Vec::into_iter)
 }
 
 /// Counts indexed CRAM records overlapping the given regions and matching an HTSlib-style filter expression.
@@ -5765,11 +6637,24 @@ struct PileupRecord {
 struct TestPileupRecord {
     name: Option<Vec<u8>>,
     reference_name: String,
+    reference_sequence_id: usize,
     start: usize,
     mapping_quality: u8,
     is_reverse: bool,
+    flags: u16,
+    mate_reference_sequence_id: Option<usize>,
+    mate_start: Option<usize>,
+    template_length: i32,
     sequence: Vec<u8>,
     quality_scores: Vec<u8>,
+    /// CIGAR ops as `(bam_op_code, len)` — M0 I1 D2 N3 S4 H5 P6 =7 X8.
+    /// Needed by the consensus Bayesian `nm_init` precompute
+    /// (soft-clip cost + the MD reference walk).
+    cigar: Vec<(u8, usize)>,
+    /// `MD` aux tag bytes, when present (drives the per-base local-NM).
+    md: Option<Vec<u8>>,
+    /// `NM` aux tag value, when present.
+    nm: Option<i64>,
     columns: Vec<TestPileupColumn>,
 }
 
@@ -5791,12 +6676,28 @@ impl TestPileupRecord {
     where
         R: sam::alignment::Record + ?Sized,
     {
-        use sam::alignment::record::Flags;
+        Self::try_from_record_with_options(header, record, &PileupOptions::default())
+    }
 
+    fn try_from_record_with_options<R>(
+        header: &Header,
+        record: &R,
+        options: &PileupOptions,
+    ) -> io::Result<Option<Self>>
+    where
+        R: sam::alignment::Record + ?Sized,
+    {
         let flags = record.flags()?;
+        let flag_bits = u16::from(flags);
 
-        if flags.intersects(Flags::UNMAPPED | Flags::SECONDARY | Flags::QC_FAIL | Flags::DUPLICATE)
+        if flag_bits & options.exclude_flags != 0
+            || flag_bits & options.require_flags != options.require_flags
         {
+            return Ok(None);
+        }
+
+        // HTSlib mpileup MPLP_NO_ORPHAN: drop paired-but-not-proper reads.
+        if options.discard_orphans && flag_bits & 0x1 != 0 && flag_bits & 0x2 == 0 {
             return Ok(None);
         }
 
@@ -5806,6 +6707,15 @@ impl TestPileupRecord {
         let Some(alignment_start) = record.alignment_start().transpose()? else {
             return Ok(None);
         };
+
+        let mapping_quality = record
+            .mapping_quality()
+            .transpose()?
+            .map_or(255, |q| q.get());
+
+        if mapping_quality < options.min_mapping_quality {
+            return Ok(None);
+        }
 
         let name = record.name().map(|name| name.to_vec());
         let reference_name = header
@@ -5825,10 +6735,16 @@ impl TestPileupRecord {
             quality_scores.resize(sequence.len(), u8::MAX);
         }
 
-        let mapping_quality = record
-            .mapping_quality()
-            .transpose()?
-            .map_or(255, |q| q.get());
+        // Mate info only feeds the heuristic overlap correction; never fail
+        // the whole pileup if a record's mate fields are unreadable.
+        let mate_reference_sequence_id = record
+            .mate_reference_sequence_id(header)
+            .and_then(Result::ok);
+        let mate_start = record
+            .mate_alignment_start()
+            .and_then(Result::ok)
+            .map(|p| usize::from(p) - 1);
+        let template_length = record.template_length().unwrap_or(0);
         let start = usize::from(alignment_start) - 1;
         let mut columns = test_pileup_columns(record, start, &sequence)?;
 
@@ -5840,14 +6756,52 @@ impl TestPileupRecord {
             last.is_tail = true;
         }
 
+        // Capture CIGAR + MD/NM for the consensus Bayesian `nm_init`
+        // precompute (additive; unused by the existing pileup paths).
+        use sam::alignment::record::cigar::op::Kind as CigKind;
+        let mut cigar = Vec::new();
+        for result in record.cigar().iter() {
+            let op = result?;
+            let code = match op.kind() {
+                CigKind::Match => 0u8,
+                CigKind::Insertion => 1,
+                CigKind::Deletion => 2,
+                CigKind::Skip => 3,
+                CigKind::SoftClip => 4,
+                CigKind::HardClip => 5,
+                CigKind::Pad => 6,
+                CigKind::SequenceMatch => 7,
+                CigKind::SequenceMismatch => 8,
+            };
+            cigar.push((code, op.len()));
+        }
+        use sam::alignment::record::data::field::{Tag, Value};
+        let data = record.data();
+        let md = match data.get(&Tag::MISMATCHED_POSITIONS).transpose()? {
+            Some(Value::String(s)) => Some(s.to_string().into_bytes()),
+            _ => None,
+        };
+        let nm = match data.get(&Tag::EDIT_DISTANCE).transpose()? {
+            Some(v) => v.as_int(),
+            None => None,
+        };
+
         Ok(Some(Self {
             name,
             reference_name,
+            reference_sequence_id,
             start,
             mapping_quality,
             is_reverse: flags.is_reverse_complemented(),
+            flags: flag_bits,
+            mate_reference_sequence_id,
+            mate_start,
+            template_length,
             sequence,
             quality_scores,
+            cigar,
+            md,
+            nm,
             columns,
         }))
     }
@@ -6798,14 +7752,23 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        count_bam_records_from_path, count_bam_records_in_region_from_path,
-        count_sam_records_from_path, mpileup_baq_from_alignment, mpileup_indel_alignment_score,
+        PileupColumn, compute_local_nm, count_bam_records_from_path,
+        count_bam_records_in_region_from_path, count_sam_records_from_path, local_nm_poly,
+        local_nm_score, mpileup_baq_from_alignment, mpileup_indel_alignment_score,
+        pileup_from_alignment_paths, pileup_from_alignment_paths_with_reference,
         query_bam_regions_from_path, read_bam_header_from_path, read_cram_header_from_path,
         read_sam_header_from_path, reference_sequence_count,
         synchronized_pileup_from_alignment_paths,
         view_sam_as_fastq_split_text_from_reader_with_flag_filter_and_suffix,
         write_bam_from_sam_reader, write_bam_regions_from_path,
     };
+
+    fn column_at(columns: &[PileupColumn], position: usize) -> &PileupColumn {
+        columns
+            .iter()
+            .find(|column| column.position == position)
+            .unwrap_or_else(|| panic!("no pileup column at position {position}"))
+    }
 
     fn fixture(path: &str) -> PathBuf {
         let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -7017,5 +7980,382 @@ mod tests {
                 && column.depths_by_input[1] > 0
                 && column.total_depth == column.depths_by_input.iter().sum::<usize>()
         }));
+    }
+
+    #[test]
+    fn test_pileup_iterator_reports_base_quality_indel_and_refskip() {
+        let path =
+            std::env::temp_dir().join(format!("htslib-rs-plp-cigar-{}-in.sam", std::process::id()));
+        std::fs::write(
+            &path,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:30\n\
+             del\t0\tsq0\t1\t60\t4M2D4M\t*\t0\t0\tACGTACGT\tIIIIJJJJ\n\
+             ins\t0\tsq0\t1\t60\t4M2I4M\t*\t0\t0\tAAAACCGGGG\tIIIIKKLLLL\n\
+             skip\t0\tsq0\t1\t60\t4M3N4M\t*\t0\t0\tTTTTGGGG\tIIIIJJJJ\n",
+        )
+        .unwrap();
+
+        let columns = pileup_from_alignment_paths(std::slice::from_ref(&path))
+            .inspect(|_| {
+                let _ = std::fs::remove_file(&path);
+            })
+            .unwrap();
+
+        // Column 4 (zero-based ref index 3): last matched base before each indel.
+        let c4 = column_at(&columns, 4);
+        assert_eq!(c4.total_depth(), 3);
+        let reads = &c4.reads_by_input[0];
+
+        let del = reads.iter().find(|r| r.indel < 0).unwrap();
+        assert_eq!(del.base, Some(b'T'));
+        assert_eq!(del.quality, Some(b'I' - 33));
+        assert_eq!(del.qpos, 3);
+        assert_eq!(del.indel, -2);
+        assert!(del.insertion.is_empty());
+
+        let ins = reads.iter().find(|r| r.indel > 0).unwrap();
+        assert_eq!(ins.base, Some(b'A'));
+        assert_eq!(ins.indel, 2);
+        assert_eq!(ins.insertion, b"CC");
+
+        let plain = reads.iter().find(|r| r.indel == 0).unwrap();
+        assert_eq!(plain.base, Some(b'T'));
+        assert_eq!(plain.indel, 0);
+
+        // Column 5 (zero-based 4): deletion in `del`, refskip in `skip`.
+        let c5 = column_at(&columns, 5);
+        let c5_reads = &c5.reads_by_input[0];
+        let deleted = c5_reads.iter().find(|r| r.is_deletion).unwrap();
+        assert_eq!(deleted.base, None);
+        assert_eq!(deleted.quality, None);
+        let skipped = c5_reads.iter().find(|r| r.is_refskip).unwrap();
+        assert_eq!(skipped.base, None);
+        assert_eq!(skipped.quality, None);
+
+        // Heads at the first column, tails at the read's final aligned column.
+        let c1 = column_at(&columns, 1);
+        assert!(c1.reads_by_input[0].iter().all(|r| r.is_head));
+        let last = column_at(&columns, 10);
+        assert!(last.reads_by_input[0].iter().any(|r| r.is_tail));
+    }
+
+    #[test]
+    fn test_pileup_iterator_merges_multiple_inputs() {
+        let path =
+            std::env::temp_dir().join(format!("htslib-rs-plp-merge-{}-in.sam", std::process::id()));
+        std::fs::write(
+            &path,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:20\n\
+             a\t0\tsq0\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n",
+        )
+        .unwrap();
+
+        let columns = pileup_from_alignment_paths(&[path.clone(), path.clone()])
+            .inspect(|_| {
+                let _ = std::fs::remove_file(&path);
+            })
+            .unwrap();
+
+        assert_eq!(columns.len(), 4);
+        for column in &columns {
+            assert_eq!(column.reads_by_input.len(), 2);
+            assert_eq!(column.depth_of_input(0), 1);
+            assert_eq!(column.depth_of_input(1), 1);
+            assert_eq!(column.total_depth(), 2);
+            assert_eq!(column.reads_by_input[0], column.reads_by_input[1]);
+        }
+    }
+
+    #[test]
+    fn test_pileup_options_filter_by_flags_and_mapq() {
+        use super::{PileupOptions, pileup_from_alignment_paths_with_options};
+
+        let path =
+            std::env::temp_dir().join(format!("htslib-rs-plp-opts-{}-in.sam", std::process::id()));
+        std::fs::write(
+            &path,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:20\n\
+             keep\t0\tsq0\t1\t40\t4M\t*\t0\t0\tACGT\tIIII\n\
+             dup\t1024\tsq0\t1\t40\t4M\t*\t0\t0\tACGT\tIIII\n\
+             lowmq\t0\tsq0\t1\t5\t4M\t*\t0\t0\tACGT\tIIII\n",
+        )
+        .unwrap();
+
+        // Default: excludes the duplicate, keeps both mapq-40 and mapq-5.
+        let default_cols = pileup_from_alignment_paths_with_options(
+            std::slice::from_ref(&path),
+            &PileupOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(column_at(&default_cols, 1).total_depth(), 2);
+
+        // Raise the mapq floor: only the mapq-40 read survives.
+        let mq_cols = pileup_from_alignment_paths_with_options(
+            std::slice::from_ref(&path),
+            &PileupOptions {
+                min_mapping_quality: 10,
+                ..PileupOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(column_at(&mq_cols, 1).total_depth(), 1);
+
+        // Empty exclude mask: the duplicate is now included.
+        let cols = pileup_from_alignment_paths_with_options(
+            std::slice::from_ref(&path),
+            &PileupOptions {
+                exclude_flags: 0,
+                ..PileupOptions::default()
+            },
+        )
+        .inspect(|_| {
+            let _ = std::fs::remove_file(&path);
+        })
+        .unwrap();
+        assert_eq!(column_at(&cols, 1).total_depth(), 3);
+    }
+
+    #[test]
+    fn test_pileup_overlap_removal_and_orphan_filter() {
+        use super::{PileupOptions, pileup_from_alignment_paths_with_options};
+
+        let path =
+            std::env::temp_dir().join(format!("htslib-rs-plp-olap-{}-in.sam", std::process::id()));
+        // `p`: proper FR pair whose mates overlap over sq0:5-8.
+        // `o`: paired but not a proper pair (an orphan).
+        std::fs::write(
+            &path,
+            "@HD\tVN:1.6\tSO:coordinate\n\
+             @SQ\tSN:sq0\tLN:50\n\
+             p\t99\tsq0\t1\t60\t8M\t=\t5\t12\tACGTACGT\tIIIIIIII\n\
+             o\t65\tsq0\t1\t60\t8M\t*\t0\t0\tACGTACGT\tIIIIIIII\n\
+             p\t147\tsq0\t5\t60\t8M\t=\t1\t-12\tACGTACGT\tIIIIIIII\n",
+        )
+        .unwrap();
+
+        // Overlap removal on (default): at sq0:5 the two `p` mates collapse —
+        // one quality zeroed, the survivor boosted to the capped sum (80).
+        let cols = pileup_from_alignment_paths_with_options(
+            std::slice::from_ref(&path),
+            &PileupOptions {
+                discard_orphans: true,
+                ..PileupOptions::default()
+            },
+        )
+        .unwrap();
+        let c5 = column_at(&cols, 5);
+        let p_reads: Vec<_> = c5.reads_by_input[0]
+            .iter()
+            .filter(|r| r.name.as_deref() == Some(b"p"))
+            .collect();
+        assert_eq!(p_reads.len(), 2);
+        let mut quals: Vec<u8> = p_reads.iter().map(|r| r.qpos_quality).collect();
+        quals.sort_unstable();
+        assert_eq!(quals, vec![0, 80]);
+        // The orphan `o` is dropped everywhere when discard_orphans is set.
+        assert!(cols.iter().all(|c| {
+            c.reads_by_input[0]
+                .iter()
+                .all(|r| r.name.as_deref() != Some(b"o"))
+        }));
+
+        // Orphan retained when discard_orphans is cleared.
+        let cols = pileup_from_alignment_paths_with_options(
+            std::slice::from_ref(&path),
+            &PileupOptions {
+                discard_orphans: false,
+                ..PileupOptions::default()
+            },
+        )
+        .inspect(|_| {
+            let _ = std::fs::remove_file(&path);
+        })
+        .unwrap();
+        assert!(cols.iter().any(|c| {
+            c.reads_by_input[0]
+                .iter()
+                .any(|r| r.name.as_deref() == Some(b"o"))
+        }));
+    }
+
+    #[test]
+    fn test_cram_all_records_match_bam_equivalent() {
+        use super::query_cram_records_all_from_path_with_reference;
+        use crate::sam::alignment::RecordBuf;
+
+        let cram = fixture("htslib/test/range.cram");
+        let reference = fixture("htslib/test/ce.fa");
+        let bam = fixture("htslib/test/range.bam");
+
+        let cram_records =
+            query_cram_records_all_from_path_with_reference(&cram, &reference).unwrap();
+
+        let mut reader = crate::bam::io::Reader::new(std::fs::File::open(&bam).unwrap());
+        let bam_header = reader.read_header().unwrap();
+        let bam_records: Vec<RecordBuf> = reader
+            .records()
+            .map(|r| RecordBuf::try_from_alignment_record(&bam_header, &r.unwrap()).unwrap())
+            .collect();
+
+        assert!(!cram_records.is_empty());
+        assert_eq!(cram_records.len(), bam_records.len());
+
+        for (c, b) in cram_records.iter().zip(&bam_records) {
+            assert_eq!(c.name(), b.name());
+            assert_eq!(c.flags(), b.flags());
+            assert_eq!(c.alignment_start(), b.alignment_start());
+            assert_eq!(c.sequence().as_ref(), b.sequence().as_ref());
+            assert_eq!(c.quality_scores().as_ref(), b.quality_scores().as_ref());
+            // NM is reference-derived and not stored in CRAM; noodles does
+            // not synthesize it on decode, so it is recomputed by callers
+            // (e.g. stats/reference) rather than asserted here.
+        }
+    }
+
+    #[test]
+    fn write_bam_from_path_transforming_header_rewrites_header_keeps_records() {
+        use super::{summarize_bam_records_from_path, write_bam_from_path_transforming_header};
+        let bam = fixture("htslib/test/range.bam");
+        let dir = std::env::temp_dir().join(format!("htslib-rs-bamhdr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("out.bam");
+
+        let dst = std::fs::File::create(&out).unwrap();
+        write_bam_from_path_transforming_header(&bam, dst, |text| {
+            // Append a @PG-shaped line before the first non-@ line.
+            Ok(format!("{text}@PG\tID:probe\tPN:probe\n"))
+        })
+        .unwrap();
+
+        let before = summarize_bam_records_from_path(&bam).unwrap();
+        let after = summarize_bam_records_from_path(&out).unwrap();
+        assert_eq!(before.len(), after.len());
+        for (a, b) in before.iter().zip(&after) {
+            assert_eq!(a.flags_u16(), b.flags_u16());
+            assert_eq!(a.reference_sequence_id(), b.reference_sequence_id());
+            assert_eq!(a.alignment_start(), b.alignment_start());
+        }
+        let hdr = read_bam_header_from_path(&out).unwrap();
+        assert!(
+            hdr.programs().as_ref().keys().any(|k| {
+                let id: &[u8] = k.as_ref();
+                id == b"probe"
+            }),
+            "transformed header must carry the injected @PG"
+        );
+    }
+
+    #[test]
+    fn cram_summaries_without_reference_match_bam_flags_and_tids() {
+        // The synthetic-reference path must yield the same record
+        // count and per-record (flags, reference id, position) as the
+        // BAM equivalent — the only fields idxstats/flagstat need —
+        // without an external reference.
+        use super::summarize_cram_records_from_path_synthesizing_reference;
+        use super::{summarize_bam_records_from_path, summarize_cram_records_from_path};
+
+        let cram = fixture("htslib/test/range.cram");
+        let bam = fixture("htslib/test/range.bam");
+
+        // The plain no-reference path errors on reference-compressed
+        // CRAM (noodles eagerly resolves), which is exactly why the
+        // synthesizing variant exists.
+        assert!(summarize_cram_records_from_path(&cram).is_err());
+
+        let cram_records = summarize_cram_records_from_path_synthesizing_reference(&cram).unwrap();
+        let bam_records = summarize_bam_records_from_path(&bam).unwrap();
+
+        assert!(!cram_records.is_empty());
+        assert_eq!(cram_records.len(), bam_records.len());
+        for (c, b) in cram_records.iter().zip(&bam_records) {
+            assert_eq!(c.flags_u16(), b.flags_u16());
+            assert_eq!(c.reference_sequence_id(), b.reference_sequence_id());
+            assert_eq!(c.alignment_start(), b.alignment_start());
+        }
+    }
+
+    #[test]
+    fn query_cram_records_all_from_path_errors_on_reference_compressed_cram() {
+        // The no-external-reference all-record reader is for
+        // embed_ref CRAM; a reference-compressed CRAM (range.cram)
+        // must error cleanly rather than silently mis-decoding.
+        // (The positive embed_ref path is proven by the samtools-rs
+        // `reference` CRAM integration test, whose fixture is an
+        // embed_ref CRAM not shipped in htslib-rs/htslib/test.)
+        use super::query_cram_records_all_from_path;
+        let cram = fixture("htslib/test/range.cram");
+        assert!(query_cram_records_all_from_path(&cram).is_err());
+    }
+
+    #[test]
+    fn test_pileup_iterator_cram_matches_bam() {
+        let bam = fixture("htslib/test/range.bam");
+        let cram = fixture("htslib/test/range.cram");
+        let reference = fixture("htslib/test/ce.fa");
+
+        let mut from_bam = pileup_from_alignment_paths(std::slice::from_ref(&bam)).unwrap();
+        let mut from_cram =
+            pileup_from_alignment_paths_with_reference(std::slice::from_ref(&cram), &reference)
+                .unwrap();
+
+        // The consensus-Bayesian `bayes_*` fields derive from the `MD`
+        // tag, which CRAM regenerates and BAM carries verbatim, so they
+        // can legitimately differ by container. They are not part of
+        // "does the CRAM pileup match the BAM pileup"; normalise them.
+        let strip = |cols: &mut Vec<PileupColumn>| {
+            for c in cols {
+                for input in &mut c.reads_by_input {
+                    for r in input {
+                        r.bayes_poly = 0;
+                        r.bayes_nm_local = 0.0;
+                    }
+                }
+            }
+        };
+        strip(&mut from_bam);
+        strip(&mut from_cram);
+
+        assert!(!from_bam.is_empty());
+        assert_eq!(from_bam, from_cram);
+    }
+
+    #[test]
+    fn compute_local_nm_packs_poly_and_md_mismatch_cost() {
+        // 10bp read, qual 40, no clips, MD "4A5" -> one mismatch at
+        // reference offset 4. Defaults: nm_halo=50, sc_cost=60.
+        let seq = b"ACGTACGTAC";
+        let qual = [40u8; 10];
+        let cigar = [(0u8, 10usize)]; // 10M
+        let lnm = compute_local_nm(seq, &qual, &cigar, Some(b"4A5"), 50, 60, false);
+        assert_eq!(lnm.len(), 10);
+
+        // Homopolymer high-8-bits: this seq has no runs (poly 0 every
+        // base), so >>24 == 0 everywhere.
+        for &v in &lnm {
+            assert_eq!(v >> 24, 0);
+        }
+        // The single MD mismatch at pos 4 adds the +10 inner halo to
+        // every base (halo=50 spans the whole 10bp read), plus the
+        // adj_qual deficit. So all low-24 scores are > 0.
+        for &v in &lnm {
+            assert!(v & ((1 << 24) - 1) > 0, "mismatch halo + adj_qual");
+        }
+        // local_nm_score divides the masked value by 10; idx clamping.
+        assert_eq!(local_nm_score(&lnm, -1), (lnm[0] & 0xff_ffff) as f64);
+        assert_eq!(local_nm_score(&lnm, 99), (lnm[9] & 0xff_ffff) as f64);
+        assert_eq!(local_nm_score(&lnm, 4), (lnm[4] & 0xff_ffff) as f64 / 10.0);
+
+        // A homopolymer read: AAAAA -> first base sees a run of 4
+        // following, poly=4 in the high bits for the whole run.
+        let hp = compute_local_nm(b"AAAAA", &[30u8; 5], &[(0u8, 5)], None, 50, 60, false);
+        assert_eq!(hp[0] >> 24, 4);
+        assert_eq!(local_nm_poly(&hp, 0), 4);
+        assert_eq!(local_nm_poly(&hp, 10), 0); // out of range -> 0
+
+        // Empty read is handled.
+        assert!(compute_local_nm(b"", &[], &[], None, 50, 60, false).is_empty());
     }
 }

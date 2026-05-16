@@ -201,11 +201,36 @@ where
 }
 
 /// Builds a BAI index for a coordinate-sorted BAM file.
+///
+/// Unlike `noodles_bam::fs::index`, this does **not** require the SAM header
+/// to carry `@HD SO:coordinate`: upstream `samtools index` indexes
+/// coordinate-ordered BAMs whose header omits the sort-order tag (e.g.
+/// `test/dat/test_input_1_{a,b}.bam`), so the data order — not the header
+/// annotation — is authoritative. The record loop mirrors the CSI/SAM-BAI
+/// builders, which already index without the header check.
 pub fn build_bai<P>(src: P) -> io::Result<BaiIndex>
 where
     P: AsRef<Path>,
 {
-    bam::fs::index(src)
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let header = reader.read_header()?;
+    let mut indexer = alignment_bai_indexer();
+    let mut record = bam::Record::default();
+    let mut start_position = reader.get_ref().virtual_position();
+
+    while reader.read_record(&mut record)? != 0 {
+        let end_position = reader.get_ref().virtual_position();
+        let chunk = csi::binning_index::index::reference_sequence::bin::Chunk::new(
+            start_position,
+            end_position,
+        );
+        let alignment_context = bam_alignment_context(&record)?;
+
+        indexer.add_record(alignment_context, chunk)?;
+        start_position = end_position;
+    }
+
+    Ok(indexer.build(header.reference_sequences().len()))
 }
 
 /// Builds a CRAI index for a coordinate-sorted CRAM file.
@@ -231,7 +256,12 @@ where
 {
     let mut reader = File::open(src).map(bam::io::Reader::new)?;
     let header = reader.read_header()?;
-    let mut indexer = alignment_csi_indexer(min_shift);
+    // Size the CSI depth from the largest reference so very large
+    // references (e.g. > 2^29, which BAI cannot address) get enough bin
+    // levels — matching upstream CSI auto-sizing. The SAM-CSI builder
+    // already does this; the BAM path previously used a fixed depth of 5.
+    let depth = alignment_csi_depth_for_header(&header, min_shift);
+    let mut indexer = alignment_csi_indexer_with_depth(min_shift, depth);
     let mut record = bam::Record::default();
     let mut start_position = reader.get_ref().virtual_position();
 
