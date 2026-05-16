@@ -3298,9 +3298,7 @@ pub fn compute_local_nm(
     let last = cigar.len().wrapping_sub(1);
     let tail_sc = !cigar.is_empty()
         && (cigar[last].0 == 4
-            || (cigar[last].0 == 5
-                && cigar.len() > 1
-                && cigar[last - 1].0 == 4));
+            || (cigar[last].0 == 5 && cigar.len() > 1 && cigar[last - 1].0 == 4));
     if tail_sc {
         let mut k = qlen as i64 - 1;
         while k >= qlen as i64 - halo && k >= 0 {
@@ -4928,6 +4926,40 @@ where
     let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
 
     summarize_cram_records_from_path_with_reference_repository(src, reference_sequence_repository)
+}
+
+/// Reads CRAM records into summaries **without an external reference**,
+/// by synthesizing an all-`N` repository sized from the CRAM header's
+/// `@SQ` lines.
+///
+/// CRAM stores each record's BAM flags, reference id, position, mapping
+/// quality and read name in core/external data series independently of
+/// the reference; only the *sequence* (and NM/MD-derived values) is
+/// reconstructed against it. So for consumers that only need those
+/// reference-independent fields — `idxstats`, `flagstat` — a synthetic
+/// reference yields byte-identical counts while letting the noodles
+/// CRAM decoder run without erroring on a missing reference. (The
+/// decoded `sequence` bytes are *not* meaningful with this path.)
+pub fn summarize_cram_records_from_path_synthesizing_reference<P>(
+    src: P,
+) -> io::Result<Vec<AlignmentRecordSummary>>
+where
+    P: AsRef<Path>,
+{
+    let data_path = associated_data_path(&src);
+    let header = read_cram_header_from_path(&data_path)?;
+    let records: Vec<fasta::Record> = header
+        .reference_sequences()
+        .iter()
+        .map(|(name, reference_sequence)| {
+            let len = usize::from(reference_sequence.length());
+            let definition = fasta::record::Definition::new(name.clone(), None);
+            let sequence = fasta::record::Sequence::from(vec![b'N'; len]);
+            fasta::Record::new(definition, sequence)
+        })
+        .collect();
+    let repository = fasta::Repository::new(records);
+    summarize_cram_records_from_path_with_reference_repository(src, repository)
 }
 
 /// Reads CRAM input without producing output and returns the number of records seen.
@@ -7585,9 +7617,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        compute_local_nm, local_nm_poly, local_nm_score,
-        PileupColumn, count_bam_records_from_path, count_bam_records_in_region_from_path,
-        count_sam_records_from_path, mpileup_baq_from_alignment, mpileup_indel_alignment_score,
+        PileupColumn, compute_local_nm, count_bam_records_from_path,
+        count_bam_records_in_region_from_path, count_sam_records_from_path, local_nm_poly,
+        local_nm_score, mpileup_baq_from_alignment, mpileup_indel_alignment_score,
         pileup_from_alignment_paths, pileup_from_alignment_paths_with_reference,
         query_bam_regions_from_path, read_bam_header_from_path, read_cram_header_from_path,
         read_sam_header_from_path, reference_sequence_count,
@@ -8049,6 +8081,35 @@ mod tests {
     }
 
     #[test]
+    fn cram_summaries_without_reference_match_bam_flags_and_tids() {
+        // The synthetic-reference path must yield the same record
+        // count and per-record (flags, reference id, position) as the
+        // BAM equivalent — the only fields idxstats/flagstat need —
+        // without an external reference.
+        use super::summarize_cram_records_from_path_synthesizing_reference;
+        use super::{summarize_bam_records_from_path, summarize_cram_records_from_path};
+
+        let cram = fixture("htslib/test/range.cram");
+        let bam = fixture("htslib/test/range.bam");
+
+        // The plain no-reference path errors on reference-compressed
+        // CRAM (noodles eagerly resolves), which is exactly why the
+        // synthesizing variant exists.
+        assert!(summarize_cram_records_from_path(&cram).is_err());
+
+        let cram_records = summarize_cram_records_from_path_synthesizing_reference(&cram).unwrap();
+        let bam_records = summarize_bam_records_from_path(&bam).unwrap();
+
+        assert!(!cram_records.is_empty());
+        assert_eq!(cram_records.len(), bam_records.len());
+        for (c, b) in cram_records.iter().zip(&bam_records) {
+            assert_eq!(c.flags_u16(), b.flags_u16());
+            assert_eq!(c.reference_sequence_id(), b.reference_sequence_id());
+            assert_eq!(c.alignment_start(), b.alignment_start());
+        }
+    }
+
+    #[test]
     fn test_pileup_iterator_cram_matches_bam() {
         let bam = fixture("htslib/test/range.bam");
         let cram = fixture("htslib/test/range.cram");
@@ -8103,14 +8164,8 @@ mod tests {
         }
         // local_nm_score divides the masked value by 10; idx clamping.
         assert_eq!(local_nm_score(&lnm, -1), (lnm[0] & 0xff_ffff) as f64);
-        assert_eq!(
-            local_nm_score(&lnm, 99),
-            (lnm[9] & 0xff_ffff) as f64
-        );
-        assert_eq!(
-            local_nm_score(&lnm, 4),
-            (lnm[4] & 0xff_ffff) as f64 / 10.0
-        );
+        assert_eq!(local_nm_score(&lnm, 99), (lnm[9] & 0xff_ffff) as f64);
+        assert_eq!(local_nm_score(&lnm, 4), (lnm[4] & 0xff_ffff) as f64 / 10.0);
 
         // A homopolymer read: AAAAA -> first base sees a run of 4
         // following, poly=4 in the high bits for the whole run.
