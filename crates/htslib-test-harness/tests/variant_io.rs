@@ -87,6 +87,46 @@ fn vcf_record_line_count(src: &str) -> usize {
     vcf_record_lines(src).len()
 }
 
+fn vcf_miniview_filtered_text(src: &str) -> String {
+    const ERASE_TAGS: &[&str] = &[
+        "IMF=", "DP=", "IDV=", "IMP=", "IS=", "VDB=", "SGB=", "MQB=", "BQB=", "RPB=", "MQ0F=",
+        "MQSB=",
+    ];
+
+    let mut out = String::new();
+    for line in src.lines() {
+        if line.starts_with("##") {
+            continue;
+        }
+
+        let mut line = line.to_string();
+        if !line.starts_with('#') {
+            for tag in ERASE_TAGS {
+                erase_vcf_miniview_tag(&mut line, tag);
+            }
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
+fn erase_vcf_miniview_tag(line: &mut String, tag: &str) {
+    let Some(mut begin) = line.get(1..).and_then(|s| s.find(tag).map(|i| i + 1)) else {
+        return;
+    };
+
+    let bytes = line.as_bytes();
+    let mut end = begin;
+    while end < bytes.len() && bytes[end] != b'\t' && bytes[end] != b';' {
+        end += 1;
+    }
+    if begin > 0 && bytes[begin - 1] == b';' {
+        begin -= 1;
+    }
+    line.replace_range(begin..end, "");
+}
+
 fn bcf_sr_weird_chromosome_cases() -> [(&'static str, &'static str); 12] {
     [
         ("1", "bcf-sr/weird-chr-names.1.out"),
@@ -315,6 +355,40 @@ fn ports_test_view_bcf_to_vcf_output() -> Result<(), Box<dyn std::error::Error>>
     let expected = std::fs::read_to_string(fixture("tabix/vcf_file.vcf"))?;
 
     assert_eq!(actual, expected);
+
+    Ok(())
+}
+
+#[test]
+fn ports_vcf_miniview_filtered_bcf_output() -> Result<(), Box<dyn std::error::Error>> {
+    let vcf_path = temp_path("miniview.vcf");
+    let bcf_path = temp_path("miniview.bcf");
+    let vcf = concat!(
+        "##fileformat=VCFv4.3\n",
+        "##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n",
+        "##INFO=<ID=VDB,Number=1,Type=Float,Description=\"Bias\">\n",
+        "##INFO=<ID=MQSB,Number=1,Type=Float,Description=\"Bias\">\n",
+        "##INFO=<ID=KEEP,Number=1,Type=Integer,Description=\"Keep\">\n",
+        "##contig=<ID=1,length=100>\n",
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+        "1\t10\t.\tA\tC\t.\tPASS\tDP=9;KEEP=1;VDB=0.5;MQSB=0.7\n",
+        "1\t11\t.\tG\tT\t.\tPASS\tKEEP=2;DP=10\n",
+    );
+    std::fs::write(&vcf_path, vcf)?;
+    std::fs::write(&bcf_path, write_bcf_from_vcf_path(&vcf_path, Vec::new())?)?;
+
+    let viewed = view_bcf_as_vcf_text_from_path_with_limit(&bcf_path, None)?;
+    let filtered = vcf_miniview_filtered_text(&viewed);
+
+    cleanup(&[vcf_path, bcf_path]);
+
+    assert!(filtered.starts_with("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"));
+    assert!(!filtered.contains("##INFO"));
+    assert!(!filtered.contains("DP="));
+    assert!(!filtered.contains("VDB="));
+    assert!(!filtered.contains("MQSB="));
+    assert!(filtered.contains("KEEP=1"));
+    assert!(filtered.contains("KEEP=2"));
 
     Ok(())
 }

@@ -145,6 +145,18 @@ pub fn detect_compression_kind(data: &[u8]) -> CompressionKind {
 
 /// Reads all bytes from a plain, gzip, or BGZF local byte stream.
 pub fn read_auto(data: &[u8]) -> io::Result<Vec<u8>> {
+    read_auto_with_worker_count(data, None)
+}
+
+/// Reads all bytes from a plain, gzip, or BGZF local byte stream.
+///
+/// When `worker_count` is set and the stream is BGZF-compressed, decompression
+/// is delegated to noodles' multithreaded BGZF reader. Plain and gzip streams
+/// are unaffected by the worker count.
+pub fn read_auto_with_worker_count(
+    data: &[u8],
+    worker_count: Option<NonZero<usize>>,
+) -> io::Result<Vec<u8>> {
     match detect_compression_kind(data) {
         CompressionKind::Uncompressed => Ok(data.to_vec()),
         CompressionKind::Gzip => {
@@ -153,7 +165,12 @@ pub fn read_auto(data: &[u8]) -> io::Result<Vec<u8>> {
             reader.read_to_end(&mut buf)?;
             Ok(buf)
         }
-        CompressionKind::Bgzf => read_all(data),
+        CompressionKind::Bgzf => match worker_count {
+            Some(worker_count) => {
+                read_all_with_worker_count(io::Cursor::new(data.to_vec()), worker_count)
+            }
+            None => read_all(data),
+        },
     }
 }
 
@@ -187,6 +204,18 @@ where
 
 /// Writes bytes using an HTSlib BGZF open-mode compression kind.
 pub fn write_all_with_kind(data: &[u8], kind: CompressionKind) -> io::Result<Vec<u8>> {
+    write_all_with_kind_and_worker_count(data, kind, None)
+}
+
+/// Writes bytes using an HTSlib BGZF open-mode compression kind.
+///
+/// When `worker_count` is set and `kind` is BGZF, compression is delegated to
+/// noodles' multithreaded BGZF writer. Plain and gzip modes are unaffected.
+pub fn write_all_with_kind_and_worker_count(
+    data: &[u8],
+    kind: CompressionKind,
+    worker_count: Option<NonZero<usize>>,
+) -> io::Result<Vec<u8>> {
     match kind {
         CompressionKind::Uncompressed => Ok(data.to_vec()),
         CompressionKind::Gzip => {
@@ -194,7 +223,10 @@ pub fn write_all_with_kind(data: &[u8], kind: CompressionKind) -> io::Result<Vec
             writer.write_all(data)?;
             writer.finish()
         }
-        CompressionKind::Bgzf => write_all(Vec::new(), data),
+        CompressionKind::Bgzf => match worker_count {
+            Some(worker_count) => write_all_with_worker_count(Vec::new(), data, worker_count),
+            None => write_all(Vec::new(), data),
+        },
     }
 }
 
@@ -334,12 +366,14 @@ fn validate_bgzf_header(header: &[u8; 18]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::num::NonZero;
 
     use super::{
         CompressionKind, MAX_COMPRESSED_OFFSET, VirtualOffsetError, build_gzi,
-        detect_compression_kind, query_gzi, read_all, read_auto, read_gzi, virtual_offset,
-        virtual_offset_from_position, virtual_offset_parts, virtual_position_from_offset,
-        write_all, write_all_with_kind, write_gzi,
+        detect_compression_kind, query_gzi, read_all, read_auto, read_auto_with_worker_count,
+        read_gzi, virtual_offset, virtual_offset_from_position, virtual_offset_parts,
+        virtual_position_from_offset, write_all, write_all_with_kind,
+        write_all_with_kind_and_worker_count, write_gzi,
     };
 
     #[test]
@@ -393,6 +427,22 @@ mod tests {
             assert_eq!(detect_compression_kind(&encoded), kind);
             assert_eq!(read_auto(&encoded).unwrap(), PLAIN);
         }
+    }
+
+    #[test]
+    fn test_htslib_bgzf_worker_count_paths() {
+        const PLAIN: &[u8] = include_bytes!("../../../htslib/test/bgziptest.txt");
+        let worker_count = NonZero::new(2).unwrap();
+
+        let encoded =
+            write_all_with_kind_and_worker_count(PLAIN, CompressionKind::Bgzf, Some(worker_count))
+                .unwrap();
+
+        assert_eq!(detect_compression_kind(&encoded), CompressionKind::Bgzf);
+        assert_eq!(
+            read_auto_with_worker_count(&encoded, Some(worker_count)).unwrap(),
+            PLAIN
+        );
     }
 
     #[test]

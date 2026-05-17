@@ -361,6 +361,7 @@ pub struct AlignmentRecordSummary {
     template_length: i32,
     sequence: Vec<u8>,
     quality_scores: Vec<u8>,
+    aux_values: Vec<([u8; 2], Vec<u8>)>,
 }
 
 /// Split FASTA/FASTQ text outputs for paired-read extraction.
@@ -420,6 +421,21 @@ impl AlignmentRecordSummary {
     /// Returns the raw phred quality-score bytes.
     pub fn quality_score_bytes(&self) -> &[u8] {
         &self.quality_scores
+    }
+
+    /// Returns the SAM-text payload for an auxiliary tag, if present.
+    ///
+    /// The payload is the value after the `TAG:T:` prefix, matching
+    /// `samtools view -d TAG[:VAL]` value comparison.
+    pub fn aux_value(&self, tag: [u8; 2]) -> Option<&[u8]> {
+        self.aux_values
+            .iter()
+            .find_map(|(stored, value)| (*stored == tag).then_some(value.as_slice()))
+    }
+
+    /// Returns the `RG:Z:` read-group id, if present.
+    pub fn read_group_id(&self) -> Option<&[u8]> {
+        self.aux_value(*b"RG")
     }
 
     /// Returns the mapping quality, if any.
@@ -2415,6 +2431,30 @@ where
     })
 }
 
+/// Writes CRAM records matching an HTSlib-style filter expression as SAM text
+/// using a synthetic all-`N` reference built from the CRAM header.
+///
+/// This is intended for reference-independent filters on CRAMs that can be
+/// decoded without reconstructing reference bases exactly. The decoded
+/// sequence bytes are not meaningful for reference-compressed CRAM records.
+pub fn view_cram_as_sam_text_matching_filter_from_path_synthesizing_reference<P>(
+    src: P,
+    filter: &str,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    let data_path = associated_data_path(&src);
+    let header = read_cram_header_from_path(&data_path)?;
+    let reference_sequence_repository = synthetic_cram_reference_repository_from_header(&header);
+    let reader = File::open(data_path)?;
+    view_cram_as_sam_text_matching_filter_with_reference_repository(
+        reader,
+        reference_sequence_repository,
+        filter,
+    )
+}
+
 /// Writes CRAM records from a reader matching a filter expression as SAM text.
 pub fn view_cram_as_sam_text_matching_filter_with_reference<R, Q>(
     reader: R,
@@ -2480,11 +2520,17 @@ where
 struct SamFilterContext {
     qname: Option<String>,
     rname: Option<String>,
+    refid: Option<usize>,
     pos: Option<usize>,
     flag: u16,
     mapq: Option<u8>,
+    mrname: Option<String>,
+    mrefid: Option<usize>,
+    mpos: Option<usize>,
+    tlen: i32,
     qlen: usize,
     cigar: Option<String>,
+    ncigar: usize,
     seq: Option<String>,
     qual: Option<String>,
     library: Option<String>,
@@ -2511,9 +2557,17 @@ impl SamFilterContext {
             .reference_sequence(header)
             .transpose()?
             .map(|(name, _)| String::from_utf8_lossy(name).into_owned());
+        let refid = record.reference_sequence_id(header).transpose()?;
         let pos = record.alignment_start().transpose()?.map(usize::from);
         let flag = record.flags()?.bits();
         let mapq = record.mapping_quality().transpose()?.map(|mapq| mapq.get());
+        let mrname = record
+            .mate_reference_sequence(header)
+            .transpose()?
+            .map(|(name, _)| String::from_utf8_lossy(name).into_owned());
+        let mrefid = record.mate_reference_sequence_id(header).transpose()?;
+        let mpos = record.mate_alignment_start().transpose()?.map(usize::from);
+        let tlen = record.template_length()?;
         let sequence_len = record.sequence().len();
         let qlen = if sequence_len == 0 {
             record.cigar().read_length()?
@@ -2525,6 +2579,7 @@ impl SamFilterContext {
         let qual = quality_scores_string(record)?;
         let library = read_group_library(header, record)?;
         let cigar_ops = cigar_ops(record)?;
+        let ncigar = cigar_ops.len();
         let rlen = cigar_ops
             .iter()
             .filter(|op| op.kind().consumes_reference())
@@ -2537,11 +2592,17 @@ impl SamFilterContext {
         Ok(Self {
             qname,
             rname,
+            refid,
             pos,
             flag,
             mapq,
+            mrname,
+            mrefid,
+            mpos,
+            tlen,
             qlen,
             cigar,
+            ncigar,
             seq,
             qual,
             library,
@@ -2557,6 +2618,10 @@ impl SamFilterContext {
             (string_or_undefined(self.qname.as_deref()), 5)
         } else if symbol.starts_with("rname") {
             (string_or_undefined(self.rname.as_deref()), 5)
+        } else if symbol.starts_with("rnext") {
+            (ExprValue::string(self.mrname.as_deref().unwrap_or("*")), 5)
+        } else if symbol.starts_with("mrname") {
+            (ExprValue::string(self.mrname.as_deref().unwrap_or("*")), 6)
         } else if symbol.starts_with("cigar") {
             (string_or_undefined(self.cigar.as_deref()), 5)
         } else if symbol.starts_with("seq") {
@@ -2570,10 +2635,22 @@ impl SamFilterContext {
             )
         } else if symbol.starts_with("pos") {
             (number_or_undefined(self.pos.map(|n| n as f64)), 3)
+        } else if symbol.starts_with("endpos") {
+            (number_or_undefined(self.endpos().map(|n| n as f64)), 6)
+        } else if symbol.starts_with("pnext") {
+            (ExprValue::number(self.mpos.unwrap_or(0) as f64), 5)
+        } else if symbol.starts_with("mpos") {
+            (ExprValue::number(self.mpos.unwrap_or(0) as f64), 4)
+        } else if let Some((value, len)) = flag_expr_value(symbol, self.flag) {
+            (value, len)
         } else if symbol.starts_with("flag") {
             (ExprValue::number(f64::from(self.flag)), 4)
         } else if symbol.starts_with("mapq") {
             (number_or_undefined(self.mapq.map(f64::from)), 4)
+        } else if symbol.starts_with("mrefid") {
+            (ExprValue::number(ref_id_value(self.mrefid)), 6)
+        } else if symbol.starts_with("refid") {
+            (ExprValue::number(ref_id_value(self.refid)), 5)
         } else if symbol.starts_with("qlen") {
             (ExprValue::number(self.qlen as f64), 4)
         } else if symbol.starts_with("rlen") {
@@ -2582,6 +2659,10 @@ impl SamFilterContext {
             (ExprValue::number(self.sclen as f64), 5)
         } else if symbol.starts_with("hclen") {
             (ExprValue::number(self.hclen as f64), 5)
+        } else if symbol.starts_with("ncigar") {
+            (ExprValue::number(self.ncigar as f64), 6)
+        } else if symbol.starts_with("tlen") {
+            (ExprValue::number(f64::from(self.tlen)), 4)
         } else if let Some((tag, len)) = parse_bracketed_tag(symbol) {
             (self.aux_value(&tag), len)
         } else {
@@ -2600,6 +2681,50 @@ impl SamFilterContext {
             })
             .unwrap_or_else(ExprValue::undefined)
     }
+
+    fn endpos(&self) -> Option<usize> {
+        self.pos.map(|pos| pos + self.rlen.saturating_sub(1))
+    }
+}
+
+fn ref_id_value(id: Option<usize>) -> f64 {
+    id.map_or(-1.0, |id| id as f64)
+}
+
+fn flag_expr_value(symbol: &str, flag: u16) -> Option<(ExprValue, usize)> {
+    let suffix = symbol.strip_prefix("flag.")?;
+    let (mask, len): (u16, usize) = if suffix.starts_with("paired") {
+        (0x1, "paired".len())
+    } else if suffix.starts_with("proper_pair") {
+        (0x2, "proper_pair".len())
+    } else if suffix.starts_with("unmap") {
+        (0x4, "unmap".len())
+    } else if suffix.starts_with("munmap") {
+        (0x8, "munmap".len())
+    } else if suffix.starts_with("reverse") {
+        (0x10, "reverse".len())
+    } else if suffix.starts_with("mreverse") {
+        (0x20, "mreverse".len())
+    } else if suffix.starts_with("read1") {
+        (0x40, "read1".len())
+    } else if suffix.starts_with("read2") {
+        (0x80, "read2".len())
+    } else if suffix.starts_with("secondary") {
+        (0x100, "secondary".len())
+    } else if suffix.starts_with("qcfail") {
+        (0x200, "qcfail".len())
+    } else if suffix.starts_with("dup") {
+        (0x400, "dup".len())
+    } else if suffix.starts_with("supplementary") {
+        (0x800, "supplementary".len())
+    } else {
+        return None;
+    };
+
+    Some((
+        ExprValue::number(f64::from(flag & mask)),
+        "flag.".len() + len,
+    ))
 }
 
 fn string_or_undefined(value: Option<&str>) -> ExprValue {
@@ -2982,6 +3107,9 @@ pub struct PileupOptions {
     /// Discard "orphan"/anomalous reads: paired but not in a proper pair —
     /// HTSlib mpileup's `MPLP_NO_ORPHAN` default (cleared by `-A`).
     pub discard_orphans: bool,
+    /// Apply default BAQ realignment to base qualities when a reference is
+    /// provided.
+    pub apply_baq: bool,
 }
 
 impl Default for PileupOptions {
@@ -2992,6 +3120,7 @@ impl Default for PileupOptions {
             min_mapping_quality: 0,
             detect_overlaps: true,
             discard_orphans: false,
+            apply_baq: false,
         }
     }
 }
@@ -3101,6 +3230,55 @@ fn apply_overlap_correction(records: &mut [TestPileupRecord]) {
             }
         }
     }
+}
+
+fn apply_baq_to_pileup_records(
+    records: &mut [TestPileupRecord],
+    reference_sequences: &HashMap<Vec<u8>, Vec<u8>>,
+) -> io::Result<()> {
+    for record in records {
+        let Some(reference) = reference_sequences.get(record.reference_name.as_bytes()) else {
+            continue;
+        };
+        let cigar = pileup_cigar_string(&record.cigar);
+        let Some(baq) = mpileup_baq_from_alignment(
+            &record.sequence,
+            &record.quality_scores,
+            reference,
+            record.start,
+            &cigar,
+            false,
+        )?
+        else {
+            continue;
+        };
+
+        for (quality, baq) in record.quality_scores.iter_mut().zip(baq.bytes()) {
+            *quality = quality.saturating_sub(baq.saturating_sub(64));
+        }
+    }
+
+    Ok(())
+}
+
+fn pileup_cigar_string(cigar: &[(u8, usize)]) -> String {
+    let mut out = String::new();
+    for &(op, len) in cigar {
+        out.push_str(&len.to_string());
+        out.push(match op {
+            0 => 'M',
+            1 => 'I',
+            2 => 'D',
+            3 => 'N',
+            4 => 'S',
+            5 => 'H',
+            6 => 'P',
+            7 => '=',
+            8 => 'X',
+            _ => 'M',
+        });
+    }
+    out
 }
 
 /// A single read's contribution to a pileup column (HTSlib `bam_pileup1_t`-shaped).
@@ -3524,7 +3702,12 @@ where
     P: AsRef<Path>,
     Q: AsRef<Path>,
 {
-    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let repository = cram_reference_repository_from_fasta_path(&reference_src)?;
+    let reference_sequences = if options.apply_baq {
+        Some(read_fasta_sequences_maybe_compressed(reference_src)?)
+    } else {
+        None
+    };
     let mut inputs = paths
         .iter()
         .map(|path| {
@@ -3535,6 +3718,12 @@ where
             )
         })
         .collect::<io::Result<Vec<_>>>()?;
+
+    if let Some(reference_sequences) = reference_sequences.as_ref() {
+        for records in &mut inputs {
+            apply_baq_to_pileup_records(records, reference_sequences)?;
+        }
+    }
 
     if options.detect_overlaps {
         for records in &mut inputs {
@@ -4373,6 +4562,40 @@ where
     Ok(writer.into_inner().into_inner())
 }
 
+/// Writes indexed BAM records overlapping the given regions to BAM output using
+/// noodles' multithreaded BGZF writer.
+pub fn write_bam_regions_from_path_with_worker_count<P>(
+    src: P,
+    regions: &[Region],
+    worker_count: NonZero<usize>,
+) -> io::Result<Vec<u8>>
+where
+    P: AsRef<Path>,
+{
+    let index = read_associated_bam_index(&src)?;
+    let data_path = associated_data_path(&src);
+    let mut reader = bam::io::indexed_reader::Builder::default()
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let bgzf_writer = bgzf::io::MultithreadedWriter::with_worker_count(worker_count, Vec::new());
+    let mut writer = bam::io::Writer::from(bgzf_writer);
+
+    writer.write_header(&header)?;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query.records() {
+            let record = result?;
+            writer.write_record(&header, &record)?;
+        }
+    }
+
+    let mut bgzf_writer = writer.into_inner();
+    bgzf_writer.finish()
+}
+
 /// Writes indexed BAM records overlapping the given regions and matching a filter to BAM output.
 pub fn write_bam_regions_matching_filter_from_path<P, W>(
     src: P,
@@ -4439,6 +4662,35 @@ where
     writer.try_finish()?;
 
     Ok(writer.into_inner().into_inner())
+}
+
+/// Writes BAM input records with all required flag bits set to BAM output using
+/// noodles' multithreaded BGZF writer.
+pub fn write_bam_records_with_required_flags_from_path_with_worker_count<P>(
+    src: P,
+    required_flags: u16,
+    worker_count: NonZero<usize>,
+) -> io::Result<Vec<u8>>
+where
+    P: AsRef<Path>,
+{
+    let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    let header = reader.read_header()?;
+    let bgzf_writer = bgzf::io::MultithreadedWriter::with_worker_count(worker_count, Vec::new());
+    let mut writer = bam::io::Writer::from(bgzf_writer);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records() {
+        let record = result?;
+        let flags = u16::from(record.flags());
+        if flags & required_flags == required_flags {
+            writer.write_record(&header, &record)?;
+        }
+    }
+
+    let mut bgzf_writer = writer.into_inner();
+    bgzf_writer.finish()
 }
 
 /// Writes SAM input as BAM, including the header and all records.
@@ -4983,6 +5235,11 @@ where
 {
     let data_path = associated_data_path(&src);
     let header = read_cram_header_from_path(&data_path)?;
+    let repository = synthetic_cram_reference_repository_from_header(&header);
+    summarize_cram_records_from_path_with_reference_repository(src, repository)
+}
+
+fn synthetic_cram_reference_repository_from_header(header: &Header) -> fasta::Repository {
     let records: Vec<fasta::Record> = header
         .reference_sequences()
         .iter()
@@ -4993,8 +5250,8 @@ where
             fasta::Record::new(definition, sequence)
         })
         .collect();
-    let repository = fasta::Repository::new(records);
-    summarize_cram_records_from_path_with_reference_repository(src, repository)
+
+    fasta::Repository::new(records)
 }
 
 /// Reads CRAM input without producing output and returns the number of records seen.
@@ -5223,6 +5480,46 @@ where
     Ok(writer.into_inner().into_inner())
 }
 
+/// Writes indexed CRAM records overlapping the given regions to BAM output using
+/// noodles' multithreaded BGZF writer.
+pub fn write_cram_regions_as_bam_from_path_with_reference_with_worker_count<P, Q>(
+    src: P,
+    reference_src: Q,
+    regions: &[Region],
+    worker_count: NonZero<usize>,
+) -> io::Result<Vec<u8>>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    use sam::alignment::io::Write as _;
+
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let index = read_associated_cram_index(&src)?;
+    let data_path = associated_data_path(src);
+    let mut reader = cram::io::indexed_reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .set_index(index)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let bgzf_writer = bgzf::io::MultithreadedWriter::with_worker_count(worker_count, Vec::new());
+    let mut writer = bam::io::Writer::from(bgzf_writer);
+
+    writer.write_header(&header)?;
+
+    for region in regions {
+        let query = reader.query(&header, region)?;
+
+        for result in query {
+            let record = result?;
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    let mut bgzf_writer = writer.into_inner();
+    bgzf_writer.finish()
+}
+
 /// Writes indexed CRAM records overlapping the given regions and matching a filter to BAM output.
 pub fn write_cram_regions_matching_filter_as_bam_from_path_with_reference<P, Q, W>(
     src: P,
@@ -5381,6 +5678,33 @@ where
     })
 }
 
+/// Writes CRAM records with all required flag bits set to BAM output using
+/// noodles' multithreaded BGZF writer.
+pub fn write_cram_records_with_required_flags_as_bam_from_path_with_reference_with_worker_count<
+    P,
+    Q,
+>(
+    src: P,
+    reference_src: Q,
+    required_flags: u16,
+    worker_count: NonZero<usize>,
+) -> io::Result<Vec<u8>>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    let repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| {
+        write_cram_records_with_required_flags_as_bam_with_reference_repository_worker_count(
+            reader,
+            repository,
+            required_flags,
+            worker_count,
+        )
+    })
+}
+
 /// Writes CRAM records from a reader with all required flag bits set to BAM output.
 pub fn write_cram_records_with_required_flags_as_bam_with_reference<R, Q, W>(
     reader: R,
@@ -5434,6 +5758,38 @@ where
     writer.try_finish()?;
 
     Ok(writer.into_inner().into_inner())
+}
+
+fn write_cram_records_with_required_flags_as_bam_with_reference_repository_worker_count<R>(
+    reader: R,
+    repository: fasta::Repository,
+    required_flags: u16,
+    worker_count: NonZero<usize>,
+) -> io::Result<Vec<u8>>
+where
+    R: Read,
+{
+    use sam::alignment::io::Write as _;
+
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_reader(reader);
+    let header = reader.read_header()?;
+    let bgzf_writer = bgzf::io::MultithreadedWriter::with_worker_count(worker_count, Vec::new());
+    let mut writer = bam::io::Writer::from(bgzf_writer);
+
+    writer.write_header(&header)?;
+
+    for result in reader.records(&header) {
+        let record = result?;
+        let flags = record.flags().bits();
+        if flags & required_flags == required_flags {
+            writer.write_alignment_record(&header, &record)?;
+        }
+    }
+
+    let mut bgzf_writer = writer.into_inner();
+    bgzf_writer.finish()
 }
 
 /// Writes CRAM records matching an HTSlib-style filter expression to BAM output.
@@ -5755,6 +6111,26 @@ where
     )
 }
 
+/// Queries CRAM records from a local file using its associated CRAI index and
+/// a synthetic all-`N` reference repository sized from the CRAM header.
+///
+/// This is suitable only for consumers that do not inspect decoded read bases
+/// or reference-derived tags. Flags, coordinates, mapping qualities, CIGAR,
+/// read names, and quality scores are reference-independent CRAM fields.
+pub fn query_cram_records_from_path_synthesizing_reference<P>(
+    src: P,
+    region: &Region,
+) -> io::Result<Vec<sam::alignment::RecordBuf>>
+where
+    P: AsRef<Path>,
+{
+    let data_path = associated_data_path(&src);
+    let header = read_cram_header_from_path(&data_path)?;
+    let repository = synthetic_cram_reference_repository_from_header(&header);
+
+    query_cram_records_from_path_with_reference_repository(src, region, repository)
+}
+
 /// Builds a noodles FASTA reference repository for CRAM decoding from a local FASTA file.
 pub fn cram_reference_repository_from_fasta_path<P>(
     reference_src: P,
@@ -5763,6 +6139,19 @@ where
     P: AsRef<Path>,
 {
     let reference_src = reference_src.as_ref();
+    if path_is_bgzf_like(reference_src) {
+        let records = read_fasta_sequences_maybe_compressed(reference_src)?
+            .into_iter()
+            .map(|(name, sequence)| {
+                fasta::Record::new(
+                    fasta::record::Definition::new(name, None),
+                    fasta::record::Sequence::from(sequence),
+                )
+            })
+            .collect::<Vec<_>>();
+        return Ok(fasta::Repository::new(records));
+    }
+
     let primary_index_src = reference_src.with_extension("fa.fai");
     let fallback_index_src = append_fai_extension(reference_src);
     let reference_index = fasta::fai::fs::read(&primary_index_src).or_else(|primary_err| {
@@ -6025,6 +6414,41 @@ where
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// Writes a SAM text view of CRAM records using a synthetic all-`N`
+/// reference built from the CRAM header.
+///
+/// This mirrors [`summarize_cram_records_from_path_synthesizing_reference`]:
+/// it lets callers render CRAMs without an external reference when their
+/// downstream behavior does not depend on true reference bases. It deliberately
+/// does not synthesize MD/NM tags from the all-`N` reference.
+pub fn view_cram_as_sam_text_from_path_synthesizing_reference_and_limit<P>(
+    src: P,
+    limit: Option<usize>,
+) -> io::Result<String>
+where
+    P: AsRef<Path>,
+{
+    use sam::alignment::io::Write as _;
+
+    let raw_header = read_raw_cram_header_text(&src)?;
+    let data_path = associated_data_path(&src);
+    let header = read_cram_header_from_path(&data_path)?;
+    let repository = synthetic_cram_reference_repository_from_header(&header);
+    let mut reader = cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_path(data_path)?;
+    let header = reader.read_header()?;
+    let mut writer = sam::io::Writer::new(raw_header.into_bytes());
+
+    for result in reader.records(&header).take(limit.unwrap_or(usize::MAX)) {
+        let record = result?;
+        writer.write_alignment_record(&header, &record)?;
+    }
+
+    String::from_utf8(writer.into_inner())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
 /// Writes a SAM text view of CRAM records from a reader with an optional record limit.
 pub fn view_cram_as_sam_text_with_reference<R, Q>(
     reader: R,
@@ -6228,10 +6652,60 @@ where
 
     for result in reader.records() {
         let record = result?;
-        sequences.insert(record.name().to_vec(), record.sequence().as_ref().to_vec());
+        sequences.insert(
+            fasta_record_primary_name(record.name()).to_vec(),
+            record.sequence().as_ref().to_vec(),
+        );
     }
 
     Ok(sequences)
+}
+
+fn read_fasta_sequences_maybe_compressed<P>(src: P) -> io::Result<HashMap<Vec<u8>, Vec<u8>>>
+where
+    P: AsRef<Path>,
+{
+    let path = src.as_ref();
+    if !path_is_bgzf_like(path) {
+        return read_fasta_sequences(path);
+    }
+
+    let mut bytes = Vec::new();
+    bgzf::io::Reader::new(File::open(path)?).read_to_end(&mut bytes)?;
+    let mut sequences = HashMap::new();
+    let mut name = None;
+    let mut sequence = Vec::new();
+
+    for line in bytes.split(|&b| b == b'\n') {
+        if line.first() == Some(&b'>') {
+            if let Some(name) = name.take() {
+                sequences.insert(name, std::mem::take(&mut sequence));
+            }
+            name = Some(fasta_record_primary_name(&line[1..]).to_vec());
+        } else if line.first() != Some(&b';') {
+            sequence.extend(line.iter().filter(|b| !b.is_ascii_whitespace()));
+        }
+    }
+
+    if let Some(name) = name {
+        sequences.insert(name, sequence);
+    }
+
+    Ok(sequences)
+}
+
+fn path_is_bgzf_like(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("gz") || extension.eq_ignore_ascii_case("bgz")
+    })
+}
+
+fn fasta_record_primary_name(name: &[u8]) -> &[u8] {
+    let end = name
+        .iter()
+        .position(|b| b.is_ascii_whitespace())
+        .unwrap_or(name.len());
+    &name[..end]
 }
 
 fn record_intersects_region(
@@ -6257,9 +6731,9 @@ fn add_md_and_nm_to_record(
     use sam::alignment::record::data::field::Tag;
     use sam::alignment::record_buf::data::field::Value;
 
-    let reference_sequence_id = record
-        .reference_sequence_id()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing reference sequence"))?;
+    let Some(reference_sequence_id) = record.reference_sequence_id() else {
+        return Ok(());
+    };
     let (reference_sequence_name, _) = header
         .reference_sequences()
         .get_index(reference_sequence_id)
@@ -6432,6 +6906,14 @@ where
     let template_length = record.template_length()?;
     let sequence = record.sequence().iter().collect();
     let quality_scores = record.quality_scores().iter().collect::<io::Result<_>>()?;
+    let aux_values = record
+        .data()
+        .iter()
+        .map(|result| {
+            let (tag, value) = result?;
+            Ok((tag.into(), summary_aux_payload(value)?.into_bytes()))
+        })
+        .collect::<io::Result<_>>()?;
 
     Ok(AlignmentRecordSummary {
         name,
@@ -6445,7 +6927,48 @@ where
         template_length,
         sequence,
         quality_scores,
+        aux_values,
     })
+}
+
+fn summary_aux_payload(
+    value: sam::alignment::record::data::field::Value<'_>,
+) -> io::Result<String> {
+    use sam::alignment::record::data::field::{Value, value::Array};
+
+    let payload = match value {
+        Value::Character(n) => char::from(n).to_string(),
+        Value::Int8(n) => n.to_string(),
+        Value::UInt8(n) => n.to_string(),
+        Value::Int16(n) => n.to_string(),
+        Value::UInt16(n) => n.to_string(),
+        Value::Int32(n) => n.to_string(),
+        Value::UInt32(n) => n.to_string(),
+        Value::Float(n) => n.to_string(),
+        Value::String(s) | Value::Hex(s) => String::from_utf8_lossy(s).into_owned(),
+        Value::Array(Array::Int8(values)) => format!("c,{}", join_summary_array(values.iter())?),
+        Value::Array(Array::UInt8(values)) => format!("C,{}", join_summary_array(values.iter())?),
+        Value::Array(Array::Int16(values)) => format!("s,{}", join_summary_array(values.iter())?),
+        Value::Array(Array::UInt16(values)) => format!("S,{}", join_summary_array(values.iter())?),
+        Value::Array(Array::Int32(values)) => format!("i,{}", join_summary_array(values.iter())?),
+        Value::Array(Array::UInt32(values)) => format!("I,{}", join_summary_array(values.iter())?),
+        Value::Array(Array::Float(values)) => {
+            format!("f,{}", join_summary_array(values.iter())?)
+        }
+    };
+
+    Ok(payload)
+}
+
+fn join_summary_array<N>(iter: Box<dyn Iterator<Item = io::Result<N>> + '_>) -> io::Result<String>
+where
+    N: std::fmt::Display,
+{
+    let mut values = Vec::new();
+    for result in iter {
+        values.push(result?.to_string());
+    }
+    Ok(values.join(","))
 }
 
 fn push_base_modification_report<R>(
@@ -6828,13 +7351,20 @@ where
         match op.kind() {
             Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
                 for _ in 0..op.len() {
-                    let base = sequence.get(qpos).copied().ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidData, "CIGAR qpos is out of range")
-                    })?;
+                    let base = match sequence.get(qpos).copied() {
+                        Some(base) => Some(base),
+                        None if sequence.is_empty() => None,
+                        None => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "CIGAR qpos is out of range",
+                            ));
+                        }
+                    };
                     columns.push(TestPileupColumn {
                         reference_position,
                         qpos,
-                        base: Some(base),
+                        base,
                         is_deletion: false,
                         is_refskip: false,
                         is_head: false,
@@ -7748,19 +8278,25 @@ fn alignment_summary_end(record: &AlignmentRecordSummary) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::io::{Cursor, Write};
+    use std::num::NonZero;
     use std::path::PathBuf;
 
+    use crate::bgzf;
+
     use super::{
-        PileupColumn, compute_local_nm, count_bam_records_from_path,
-        count_bam_records_in_region_from_path, count_sam_records_from_path, local_nm_poly,
-        local_nm_score, mpileup_baq_from_alignment, mpileup_indel_alignment_score,
-        pileup_from_alignment_paths, pileup_from_alignment_paths_with_reference,
-        query_bam_regions_from_path, read_bam_header_from_path, read_cram_header_from_path,
-        read_sam_header_from_path, reference_sequence_count,
-        synchronized_pileup_from_alignment_paths, view_bam_as_sam_text,
+        PileupColumn, compute_local_nm, count_bam_records, count_bam_records_from_path,
+        count_bam_records_in_region_from_path, count_bam_records_matching_filter,
+        count_sam_records_from_path, count_sam_records_matching_filter,
+        cram_reference_repository_from_fasta_path, local_nm_poly, local_nm_score,
+        mpileup_baq_from_alignment, mpileup_indel_alignment_score, pileup_from_alignment_paths,
+        pileup_from_alignment_paths_with_reference, query_bam_regions_from_path,
+        read_bam_header_from_path, read_cram_header_from_path, read_sam_header_from_path,
+        reference_sequence_count, synchronized_pileup_from_alignment_paths, view_bam_as_sam_text,
         view_sam_as_fastq_split_text_from_reader_with_flag_filter_and_suffix,
-        write_bam_from_sam_reader, write_bam_regions_from_path,
+        write_bam_from_sam_reader,
+        write_bam_records_with_required_flags_from_path_with_worker_count,
+        write_bam_regions_from_path, write_bam_regions_from_path_with_worker_count,
     };
 
     fn column_at(columns: &[PileupColumn], position: usize) -> &PileupColumn {
@@ -7813,6 +8349,109 @@ mod tests {
 
         assert!(text.contains("\n@SQ\tSN:r3\tLN:50\tAN:ref3\n"));
         assert!(text.contains("\nr1\t0\tr3\t1\t30\t1M\t*\t0\t0\tA\t!"));
+    }
+
+    #[test]
+    fn test_filter_expression_flag_names_match_htslib_symbols() {
+        let sam = concat!(
+            "@HD\tVN:1.6\n",
+            "@SQ\tSN:ref\tLN:100\n",
+            "proper\t99\tref\t1\t30\t4M\t=\t20\t19\tACGT\t!!!!\n",
+            "unmapped\t4\t*\t0\t0\t*\t*\t0\t0\tNN\t!!\n",
+            "plain\t0\tref\t2\t30\t4M\t*\t0\t0\tTGCA\t####\n",
+        )
+        .as_bytes();
+
+        assert_eq!(
+            count_sam_records_matching_filter(Cursor::new(sam), "flag.proper_pair").unwrap(),
+            1
+        );
+        assert_eq!(
+            count_sam_records_matching_filter(Cursor::new(sam), "flag.unmap").unwrap(),
+            1
+        );
+
+        let bam_data = write_bam_from_sam_reader(Cursor::new(sam), Vec::new()).unwrap();
+        assert_eq!(
+            count_bam_records_matching_filter(Cursor::new(bam_data), "flag.proper_pair").unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_filter_expression_cigar_derived_symbols_match_htslib_symbols() {
+        let sam = concat!(
+            "@HD\tVN:1.6\n",
+            "@SQ\tSN:ref\tLN:100\n",
+            "plain\t0\tref\t2\t30\t4M\t*\t0\t0\tTGCA\t####\n",
+            "soft\t0\tref\t5\t30\t2S4M\t*\t0\t0\tAATGCA\t!!!!!!\n",
+            "hard\t0\tref\t10\t30\t3H4M\t*\t0\t0\tACGT\t!!!!\n",
+        )
+        .as_bytes();
+
+        let bam_data = write_bam_from_sam_reader(Cursor::new(sam), Vec::new()).unwrap();
+        assert_eq!(
+            count_sam_records_matching_filter(Cursor::new(sam), "rlen>=4").unwrap(),
+            3
+        );
+        assert_eq!(
+            count_bam_records_matching_filter(Cursor::new(&bam_data), "rlen>=4").unwrap(),
+            3
+        );
+        assert_eq!(
+            count_sam_records_matching_filter(Cursor::new(sam), "endpos>=13").unwrap(),
+            1
+        );
+        assert_eq!(
+            count_bam_records_matching_filter(Cursor::new(&bam_data), "endpos>=13").unwrap(),
+            1
+        );
+        assert_eq!(
+            count_bam_records_matching_filter(Cursor::new(&bam_data), "sclen>0").unwrap(),
+            1
+        );
+        assert_eq!(
+            count_bam_records_matching_filter(Cursor::new(bam_data), "hclen>0").unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_filter_expression_mate_and_reference_symbols_match_htslib_symbols() {
+        let sam = concat!(
+            "@HD\tVN:1.6\n",
+            "@SQ\tSN:ref\tLN:100\n",
+            "@SQ\tSN:alt\tLN:100\n",
+            "pair\t99\tref\t2\t30\t4M\t=\t20\t22\tTGCA\t####\n",
+            "pair\t147\tref\t20\t30\t4M\t=\t2\t-22\tACGT\t!!!!\n",
+            "other\t0\talt\t5\t30\t4M\t*\t0\t0\tNNNN\t!!!!\n",
+        )
+        .as_bytes();
+
+        let bam_data = write_bam_from_sam_reader(Cursor::new(sam), Vec::new()).unwrap();
+
+        for expr in [
+            "mpos>0",
+            "pnext>0",
+            "tlen!=0",
+            "rnext==\"ref\"",
+            "mrname==\"ref\"",
+            "refid==0",
+            "mrefid==0",
+            "ncigar==1",
+        ] {
+            let expected = if expr == "ncigar==1" { 3 } else { 2 };
+            assert_eq!(
+                count_sam_records_matching_filter(Cursor::new(sam), expr).unwrap(),
+                expected,
+                "SAM expression {expr}"
+            );
+            assert_eq!(
+                count_bam_records_matching_filter(Cursor::new(&bam_data), expr).unwrap(),
+                expected,
+                "BAM expression {expr}"
+            );
+        }
     }
 
     #[test]
@@ -7889,11 +8528,68 @@ mod tests {
     }
 
     #[test]
+    fn test_write_bam_regions_from_path_with_worker_count() {
+        let path = fixture("htslib/test/range.bam");
+        let regions = ["CHROMOSOME_II:2980-2980".parse().unwrap()];
+
+        let bam_data = write_bam_regions_from_path_with_worker_count(
+            &path,
+            &regions,
+            NonZero::new(2).unwrap(),
+        )
+        .unwrap();
+        let mut reader = crate::bam::io::Reader::new(Cursor::new(bam_data));
+        let header = reader.read_header().unwrap();
+        assert!(reference_sequence_count(&header) > 0);
+
+        let mut count = 0;
+        for result in reader.records() {
+            result.unwrap();
+            count += 1;
+        }
+
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_write_bam_records_with_required_flags_with_worker_count() {
+        let path = fixture("htslib/test/range.bam");
+
+        let bam_data = write_bam_records_with_required_flags_from_path_with_worker_count(
+            &path,
+            0,
+            NonZero::new(2).unwrap(),
+        )
+        .unwrap();
+
+        assert!(count_bam_records(Cursor::new(bam_data)).unwrap() > 0);
+    }
+
+    #[test]
     fn test_read_cram_header_and_records() {
         let path = fixture("htslib/test/range.cram");
         let header = read_cram_header_from_path(&path).unwrap();
 
         assert!(reference_sequence_count(&header) > 0);
+    }
+
+    #[test]
+    fn test_cram_reference_repository_reads_bgzf_fasta_primary_name() {
+        let path =
+            std::env::temp_dir().join(format!("htslib-rs-bgzf-ref-{}.fa.gz", std::process::id()));
+        {
+            let file = std::fs::File::create(&path).unwrap();
+            let mut writer = bgzf::io::Writer::new(file);
+            writer.write_all(b">sq0 sq0:1-12\nACGTACGTACGT\n").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let repository = cram_reference_repository_from_fasta_path(&path).unwrap();
+        let sequence = repository.get(b"sq0").transpose().unwrap().unwrap();
+        assert_eq!(sequence.as_ref().as_ref(), b"ACGTACGTACGT");
+        assert!(repository.get(b"sq0 sq0:1-12").is_none());
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -8286,6 +8982,65 @@ mod tests {
             assert_eq!(c.flags_u16(), b.flags_u16());
             assert_eq!(c.reference_sequence_id(), b.reference_sequence_id());
             assert_eq!(c.alignment_start(), b.alignment_start());
+        }
+    }
+
+    #[test]
+    fn query_cram_region_synthesizing_reference_matches_reference_backed_core_fields() {
+        use super::{
+            query_cram_records_from_path_synthesizing_reference,
+            query_cram_records_from_path_with_reference,
+        };
+        use crate::core::Region;
+        use crate::sam::alignment::record::Cigar as _;
+
+        let cram = fixture("htslib/test/range.cram");
+        let reference = fixture("htslib/test/ce.fa");
+        let region: Region = "CHROMOSOME_II:2980-2980".parse().unwrap();
+
+        let synthetic =
+            query_cram_records_from_path_synthesizing_reference(&cram, &region).unwrap();
+        let reference_backed =
+            query_cram_records_from_path_with_reference(&cram, &region, &reference).unwrap();
+
+        assert!(!synthetic.is_empty());
+        assert_eq!(synthetic.len(), reference_backed.len());
+        for (synthetic, reference_backed) in synthetic.iter().zip(&reference_backed) {
+            assert_eq!(synthetic.name(), reference_backed.name());
+            assert_eq!(synthetic.flags(), reference_backed.flags());
+            assert_eq!(
+                synthetic.reference_sequence_id(),
+                reference_backed.reference_sequence_id()
+            );
+            assert_eq!(
+                synthetic.alignment_start(),
+                reference_backed.alignment_start()
+            );
+            assert_eq!(
+                synthetic.mapping_quality(),
+                reference_backed.mapping_quality()
+            );
+            assert_eq!(
+                synthetic.quality_scores().as_ref(),
+                reference_backed.quality_scores().as_ref()
+            );
+            let synthetic_cigar = synthetic
+                .cigar()
+                .iter()
+                .map(|op| {
+                    let op = op.unwrap();
+                    (op.kind(), op.len())
+                })
+                .collect::<Vec<_>>();
+            let reference_cigar = reference_backed
+                .cigar()
+                .iter()
+                .map(|op| {
+                    let op = op.unwrap();
+                    (op.kind(), op.len())
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(synthetic_cigar, reference_cigar);
         }
     }
 
