@@ -152,6 +152,11 @@ pub const TESTS: &[Test] = &[
         note: "Covered by alignment_io.rs SAM/BGZF-SAM header-preserving record-limit, SAM parse-error ignoring, parsed SAM-to-BGZF-SAM compressed write, SAM-to-FASTQ/FASTA output, BAM no-compression output, SAM-to-BAM write with BAI output, padded BAM raw-header handling, BAM whole-file and indexed region/multi-region view with record limits, generated long BAM record round trip, CRAM whole-file/indexed region/multi-region view with record limits, SAM-to-CRAM write with CRAI output, and SAM/BAM/CRAM benchmark counts, plus variant_io.rs BCF-to-VCF, VCF/BCF whole-file and indexed-region record-limit, indexed VCF region header output, VCF compressed write with TBI output, VCF-to-BCF write with CSI output, and VCF/BCF benchmark counts; C harness output routing, generic hts_opt strings, shared thread-pool assignment, and CLI option plumbing are out of scope for the Rust-only/no-CLI target.",
     },
     Test {
+        name: "vcf-miniview.c",
+        status: Status::Passing,
+        note: "Covered by variant_io.rs BCF-to-VCF viewing and the vcf-miniview -f style filtered output test, which strips meta headers plus the same comparison-noise INFO fields while preserving unrelated INFO values.",
+    },
+    Test {
         name: "test-vcf-api.c",
         status: Status::Passing,
         note: "Covered by variant_io.rs header get/remove, header Number classification, typed INFO values, FORMAT integer and BCF float vector-end values, vcf_open_mode, rlen table, rlen mutation recalculation, invalid END, bcf_remove_allele_set, BCF iterator creation, and record serialization output cases.",

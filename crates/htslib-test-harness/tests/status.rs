@@ -20,7 +20,7 @@ fn manifest_reports_current_port_status() {
     let summary = summarize(TESTS);
 
     assert_eq!(summary.total(), TESTS.len());
-    assert_eq!(summary.passing, 41);
+    assert_eq!(summary.passing, 42);
     assert_eq!(summary.failing, 0);
     assert_eq!(summary.unported, 0);
     assert!(

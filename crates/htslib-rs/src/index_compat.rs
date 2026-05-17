@@ -3,7 +3,8 @@
 use std::{
     ffi::OsString,
     fs::File,
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Read, Write},
+    num::NonZero,
     path::{Path, PathBuf},
 };
 
@@ -213,6 +214,24 @@ where
     P: AsRef<Path>,
 {
     let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    build_bai_from_bam_reader(&mut reader)
+}
+
+/// Builds a BAI index using a multithreaded BGZF reader.
+pub fn build_bai_with_worker_count<P>(src: P, worker_count: NonZero<usize>) -> io::Result<BaiIndex>
+where
+    P: AsRef<Path>,
+{
+    let reader = File::open(src)?;
+    let decoder = bgzf::io::MultithreadedReader::with_worker_count(worker_count, reader);
+    let mut reader = bam::io::Reader::from(decoder);
+    build_bai_from_bam_reader(&mut reader)
+}
+
+fn build_bai_from_bam_reader<R>(reader: &mut bam::io::Reader<R>) -> io::Result<BaiIndex>
+where
+    R: Read + bgzf::io::Read,
+{
     let header = reader.read_header()?;
     let mut indexer = alignment_bai_indexer();
     let mut record = bam::Record::default();
@@ -238,7 +257,41 @@ pub fn build_cram_crai<P>(src: P) -> io::Result<CraiIndex>
 where
     P: AsRef<Path>,
 {
-    cram::fs::index(src)
+    let src = src.as_ref();
+    match cram_reference_repository_from_header_uri(src)? {
+        Some(repository) => cram::fs::index_with_reference_sequence_repository(src, repository),
+        None => cram::fs::index(src),
+    }
+}
+
+fn cram_reference_repository_from_header_uri(
+    src: &Path,
+) -> io::Result<Option<crate::fasta::Repository>> {
+    let mut reader = File::open(src).map(cram::io::Reader::new)?;
+    let header = reader.read_header()?;
+
+    for (_, reference_sequence) in header.reference_sequences() {
+        let Some(uri) = reference_sequence
+            .other_fields()
+            .get(&sam::header::record::value::map::reference_sequence::tag::URI)
+        else {
+            continue;
+        };
+        let uri = String::from_utf8_lossy(uri);
+        let path = uri.strip_prefix("file://").unwrap_or(&uri);
+        let mut path = PathBuf::from(path);
+        if !path.is_absolute()
+            && let Some(parent) = src.parent()
+        {
+            path = parent.join(path);
+        }
+        if path.is_file() {
+            return crate::alignment_compat::cram_reference_repository_from_fasta_path(path)
+                .map(Some);
+        }
+    }
+
+    Ok(None)
 }
 
 /// Builds a CSI index for a coordinate-sorted BAM file.
@@ -255,6 +308,42 @@ where
     P: AsRef<Path>,
 {
     let mut reader = File::open(src).map(bam::io::Reader::new)?;
+    build_bam_csi_from_reader(&mut reader, min_shift)
+}
+
+/// Builds a CSI index using a multithreaded BGZF reader.
+pub fn build_bam_csi_with_worker_count<P>(
+    src: P,
+    worker_count: NonZero<usize>,
+) -> io::Result<CsiIndex>
+where
+    P: AsRef<Path>,
+{
+    build_bam_csi_with_min_shift_and_worker_count(src, 14, worker_count)
+}
+
+/// Builds a CSI index with a custom min_shift using a multithreaded BGZF reader.
+pub fn build_bam_csi_with_min_shift_and_worker_count<P>(
+    src: P,
+    min_shift: u8,
+    worker_count: NonZero<usize>,
+) -> io::Result<CsiIndex>
+where
+    P: AsRef<Path>,
+{
+    let reader = File::open(src)?;
+    let decoder = bgzf::io::MultithreadedReader::with_worker_count(worker_count, reader);
+    let mut reader = bam::io::Reader::from(decoder);
+    build_bam_csi_from_reader(&mut reader, min_shift)
+}
+
+fn build_bam_csi_from_reader<R>(
+    reader: &mut bam::io::Reader<R>,
+    min_shift: u8,
+) -> io::Result<CsiIndex>
+where
+    R: Read + bgzf::io::Read,
+{
     let header = reader.read_header()?;
     // Size the CSI depth from the largest reference so very large
     // references (e.g. > 2^29, which BAI cannot address) get enough bin
@@ -296,6 +385,42 @@ where
     let mut reader = File::open(src)
         .map(bgzf::io::Reader::new)
         .map(sam::io::Reader::new)?;
+    build_sam_csi_from_reader(&mut reader, min_shift)
+}
+
+/// Builds a CSI index for a BGZF-compressed SAM file using a multithreaded BGZF reader.
+pub fn build_sam_csi_with_worker_count<P>(
+    src: P,
+    worker_count: NonZero<usize>,
+) -> io::Result<CsiIndex>
+where
+    P: AsRef<Path>,
+{
+    build_sam_csi_with_min_shift_and_worker_count(src, 14, worker_count)
+}
+
+/// Builds a CSI index for a BGZF-compressed SAM file with a custom min_shift using a multithreaded BGZF reader.
+pub fn build_sam_csi_with_min_shift_and_worker_count<P>(
+    src: P,
+    min_shift: u8,
+    worker_count: NonZero<usize>,
+) -> io::Result<CsiIndex>
+where
+    P: AsRef<Path>,
+{
+    let reader = File::open(src)?;
+    let decoder = bgzf::io::MultithreadedReader::with_worker_count(worker_count, reader);
+    let mut reader = sam::io::Reader::new(decoder);
+    build_sam_csi_from_reader(&mut reader, min_shift)
+}
+
+fn build_sam_csi_from_reader<R>(
+    reader: &mut sam::io::Reader<R>,
+    min_shift: u8,
+) -> io::Result<CsiIndex>
+where
+    R: BufRead + bgzf::io::Read,
+{
     let header = reader.read_header()?;
     let depth = alignment_csi_depth_for_header(&header, min_shift);
     let mut indexer = alignment_csi_indexer_with_depth(min_shift, depth);
@@ -325,6 +450,27 @@ where
     let mut reader = File::open(src)
         .map(bgzf::io::Reader::new)
         .map(sam::io::Reader::new)?;
+    build_sam_bai_from_reader(&mut reader)
+}
+
+/// Builds a BAI index for a BGZF-compressed SAM file using a multithreaded BGZF reader.
+pub fn build_sam_bai_with_worker_count<P>(
+    src: P,
+    worker_count: NonZero<usize>,
+) -> io::Result<BaiIndex>
+where
+    P: AsRef<Path>,
+{
+    let reader = File::open(src)?;
+    let decoder = bgzf::io::MultithreadedReader::with_worker_count(worker_count, reader);
+    let mut reader = sam::io::Reader::new(decoder);
+    build_sam_bai_from_reader(&mut reader)
+}
+
+fn build_sam_bai_from_reader<R>(reader: &mut sam::io::Reader<R>) -> io::Result<BaiIndex>
+where
+    R: BufRead + bgzf::io::Read,
+{
     let header = reader.read_header()?;
     let mut indexer = alignment_bai_indexer();
     let mut record = sam::Record::default();
@@ -668,13 +814,15 @@ fn unsupported_index_format_error(located: LocatedIndex) -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
     use std::path::PathBuf;
 
     use crate::csi::BinningIndex;
 
     use super::{
-        IndexFormat, associated_data_path, bai_reference_sequence_count, build_bai, build_bcf_csi,
-        build_vcf_csi, build_vcf_csi_with_min_shift, build_vcf_tbi, csi_reference_sequence_count,
+        IndexFormat, associated_data_path, bai_reference_sequence_count, build_bai,
+        build_bai_with_worker_count, build_bam_csi_with_worker_count, build_bcf_csi, build_vcf_csi,
+        build_vcf_csi_with_min_shift, build_vcf_tbi, csi_reference_sequence_count,
         locate_associated_index, read_bai, read_csi, read_tbi, tbi_reference_sequence_count,
     };
 
@@ -717,6 +865,19 @@ mod tests {
         let index = build_bai(fixture("htslib/test/range.bam")).unwrap();
 
         assert!(bai_reference_sequence_count(&index) > 0);
+    }
+
+    #[test]
+    fn test_build_bam_indexes_with_worker_count() {
+        let worker_count = NonZero::new(2).unwrap();
+
+        let bai =
+            build_bai_with_worker_count(fixture("htslib/test/range.bam"), worker_count).unwrap();
+        assert!(bai_reference_sequence_count(&bai) > 0);
+
+        let csi = build_bam_csi_with_worker_count(fixture("htslib/test/range.bam"), worker_count)
+            .unwrap();
+        assert!(csi_reference_sequence_count(&csi) > 0);
     }
 
     #[test]
