@@ -6257,9 +6257,9 @@ fn add_md_and_nm_to_record(
     use sam::alignment::record::data::field::Tag;
     use sam::alignment::record_buf::data::field::Value;
 
-    let reference_sequence_id = record
-        .reference_sequence_id()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing reference sequence"))?;
+    let Some(reference_sequence_id) = record.reference_sequence_id() else {
+        return Ok(());
+    };
     let (reference_sequence_name, _) = header
         .reference_sequences()
         .get_index(reference_sequence_id)
