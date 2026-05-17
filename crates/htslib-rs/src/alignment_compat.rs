@@ -7758,7 +7758,7 @@ mod tests {
         pileup_from_alignment_paths, pileup_from_alignment_paths_with_reference,
         query_bam_regions_from_path, read_bam_header_from_path, read_cram_header_from_path,
         read_sam_header_from_path, reference_sequence_count,
-        synchronized_pileup_from_alignment_paths,
+        synchronized_pileup_from_alignment_paths, view_bam_as_sam_text,
         view_sam_as_fastq_split_text_from_reader_with_flag_filter_and_suffix,
         write_bam_from_sam_reader, write_bam_regions_from_path,
     };
@@ -7801,6 +7801,18 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_write_bam_from_sam_reader_resolves_reference_alias() {
+        let sam =
+            b"@HD\tVN:1.6\n@SQ\tSN:r3\tLN:50\tAN:ref3\nr1\t0\tref3\t1\t30\t1M\t*\t0\t0\tA\t!\n";
+        let bam_data = write_bam_from_sam_reader(Cursor::new(sam), Vec::new()).unwrap();
+
+        let text = view_bam_as_sam_text(Cursor::new(bam_data), None).unwrap();
+
+        assert!(text.contains("\n@SQ\tSN:r3\tLN:50\tAN:ref3\n"));
+        assert!(text.contains("\nr1\t0\tr3\t1\t30\t1M\t*\t0\t0\tA\t!"));
     }
 
     #[test]
