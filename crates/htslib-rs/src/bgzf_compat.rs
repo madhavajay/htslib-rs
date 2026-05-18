@@ -1,13 +1,14 @@
 //! HTSlib-compatible BGZF helpers built on noodles BGZF primitives.
 
 use std::{
-    io::{self, Read, Seek, Write},
+    fs::File,
+    io::{self, BufReader, Read, Seek, Write},
     num::NonZero,
     path::Path,
 };
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use noodles::bgzf;
+use noodles::{bam, bgzf};
 
 /// A BGZF/GZIP uncompressed offset index.
 pub type GziIndex = bgzf::gzi::Index;
@@ -363,6 +364,80 @@ fn validate_bgzf_header(header: &[u8; 18]) -> io::Result<()> {
     }
 }
 
+/// Result of attempting the block-level BAM concatenation fast path
+/// for one input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BamFrameCopy {
+    /// The input's alignment-section BGZF frames were copied verbatim.
+    Copied,
+    /// The input's BAM header does not end on a BGZF block boundary, so
+    /// nothing was written; the caller must fall back to a
+    /// record-level re-encode for this input.
+    NotBlockAligned,
+}
+
+/// Appends the alignment-section BGZF frames of the BAM file at `src`
+/// to `out` **verbatim** (no re-deflate), iff the input's BAM header
+/// ends exactly on a BGZF block boundary.
+///
+/// This is `samtools cat`'s BAM fast path: the bulk of every input is
+/// copied as already-compressed BGZF frames instead of being decoded
+/// and re-encoded. The input's own trailing BGZF EOF block is dropped;
+/// the caller is responsible for writing a single
+/// [`noodles::bgzf::io::EOF`] block after the last input and for
+/// emitting the (shared) BAM header before the first input.
+///
+/// Returns [`BamFrameCopy::NotBlockAligned`] **without writing any
+/// bytes** when the header shares its final BGZF block with alignment
+/// data (so a verbatim copy would corrupt the stream). The caller must
+/// then fall back to a correct record-level copy for that input. This
+/// keeps the optimization strictly safe: it only ever fast-paths
+/// inputs where the boundary is provable.
+pub fn append_bam_alignment_frames<W>(src: &Path, out: &mut W) -> io::Result<BamFrameCopy>
+where
+    W: Write,
+{
+    use noodles::bgzf::io::{EOF, read_raw_frame};
+
+    // Decode just the BAM header to learn where the alignment section
+    // begins. `virtual_position()` after `read_header` is
+    // (compressed = file offset of the current BGZF block,
+    //  uncompressed = byte offset within that decoded block).
+    let mut header_reader = bam::io::Reader::new(File::open(src)?);
+    header_reader.read_header()?;
+    let position = header_reader.get_ref().virtual_position();
+    if position.uncompressed() != 0 {
+        // Header ends mid-block (shares a block with alignments); a
+        // raw frame copy is impossible without re-deflating that
+        // block. Signal the caller to fall back.
+        return Ok(BamFrameCopy::NotBlockAligned);
+    }
+    let alignment_start = position.compressed();
+
+    // Re-open and copy raw frames starting at the alignment block
+    // boundary. A one-frame lookahead lets us drop the input's own
+    // trailing EOF block while preserving any (pathological) empty
+    // block that is not the terminator.
+    let mut raw = BufReader::new(File::open(src)?);
+    raw.seek(io::SeekFrom::Start(alignment_start))?;
+
+    let mut pending: Option<Vec<u8>> = None;
+    let mut buf = Vec::new();
+    while read_raw_frame(&mut raw, &mut buf)? {
+        if let Some(frame) = pending.take() {
+            out.write_all(&frame)?;
+        }
+        pending = Some(std::mem::take(&mut buf));
+    }
+    if let Some(last) = pending
+        && last.as_slice() != EOF
+    {
+        out.write_all(&last)?;
+    }
+
+    Ok(BamFrameCopy::Copied)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -468,5 +543,67 @@ mod tests {
         let position = query_gzi(&index, 70_000).unwrap();
 
         assert!(position.compressed() > 0);
+    }
+
+    #[test]
+    fn append_bam_alignment_frames_reconstructs_records() {
+        use std::path::PathBuf;
+
+        use noodles::bam;
+        use noodles::bgzf::io::EOF;
+
+        use super::{BamFrameCopy, append_bam_alignment_frames};
+
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../htslib/test/range.bam");
+
+        // Reference: header + all records decoded normally.
+        fn names<R: std::io::Read>(
+            reader: &mut bam::io::Reader<noodles::bgzf::io::Reader<R>>,
+        ) -> Vec<Option<Vec<u8>>> {
+            reader
+                .records()
+                .map(|r| r.unwrap().name().map(|n| n.to_vec()))
+                .collect()
+        }
+
+        let mut reader = bam::io::Reader::new(std::fs::File::open(&src).unwrap());
+        let header = reader.read_header().unwrap();
+        let original = names(&mut reader);
+        assert!(!original.is_empty());
+
+        // The header's own (block-aligned) BGZF frames, taken verbatim
+        // from the source file up to the alignment boundary.
+        let mut probe = bam::io::Reader::new(std::fs::File::open(&src).unwrap());
+        probe.read_header().unwrap();
+        let boundary = probe.get_ref().virtual_position().compressed() as usize;
+        let src_bytes = std::fs::read(&src).unwrap();
+        let mut rebuilt = src_bytes[..boundary].to_vec();
+
+        // Append the alignment frames twice (cat of the file with
+        // itself) then a single shared EOF.
+        for _ in 0..2 {
+            let mut sink = Vec::new();
+            assert_eq!(
+                append_bam_alignment_frames(&src, &mut sink).unwrap(),
+                BamFrameCopy::Copied,
+                "range.bam is samtools-written and must be block-aligned"
+            );
+            rebuilt.extend_from_slice(&sink);
+        }
+        rebuilt.extend_from_slice(&EOF);
+
+        // The reconstructed stream must decode to exactly two copies of
+        // the original records, with the same header.
+        let mut out = bam::io::Reader::new(Cursor::new(rebuilt));
+        let rebuilt_header = out.read_header().unwrap();
+        assert_eq!(
+            rebuilt_header.reference_sequences().len(),
+            header.reference_sequences().len()
+        );
+        let rebuilt_records = names(&mut out);
+
+        let mut expected = original.clone();
+        expected.extend(original.clone());
+        assert_eq!(rebuilt_records, expected);
     }
 }
