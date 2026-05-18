@@ -4315,6 +4315,40 @@ where
     Ok(writer.into_inner().into_inner())
 }
 
+/// CRAM encoder knobs forwarded from `samtools view -O cram,...`.
+///
+/// `records_per_slice` / `slices_per_container` correspond to the
+/// `seqs_per_slice` / `slices_per_slice` output options; `None` keeps
+/// the noodles default. `embed_reference` matches `embed_ref=1`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CramWriteOptions {
+    pub embed_reference: bool,
+    pub records_per_slice: Option<usize>,
+    pub slices_per_container: Option<usize>,
+}
+
+impl CramWriteOptions {
+    /// Returns options that only embed the reference (the previous
+    /// `embed_ref`-only behavior).
+    pub fn embedded() -> Self {
+        Self {
+            embed_reference: true,
+            ..Self::default()
+        }
+    }
+
+    fn configure(&self, builder: cram::io::writer::Builder) -> cram::io::writer::Builder {
+        let mut builder = builder.set_embed_reference(self.embed_reference);
+        if let Some(n) = self.records_per_slice {
+            builder = builder.set_records_per_slice(n);
+        }
+        if let Some(n) = self.slices_per_container {
+            builder = builder.set_slices_per_container(n);
+        }
+        builder
+    }
+}
+
 /// Writes BAM input as CRAM using a FASTA reference.
 pub fn write_cram_from_bam_path_with_reference<P, Q, W>(
     src: P,
@@ -4356,6 +4390,31 @@ where
     )
 }
 
+/// As [`write_cram_from_bam_path_with_reference`], with explicit CRAM
+/// encoder options (`seqs_per_slice` / `slices_per_slice` /
+/// `embed_ref`).
+pub fn write_cram_from_bam_path_with_reference_and_options<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    options: CramWriteOptions,
+    writer: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    File::open(src).and_then(|reader| {
+        write_cram_from_bam_reader_with_reference_repository_opts(
+            reader,
+            reference_sequence_repository,
+            writer,
+            options,
+        )
+    })
+}
+
 fn write_cram_from_bam_reader_with_reference_repository<R, W>(
     reader: R,
     reference_sequence_repository: fasta::Repository,
@@ -4365,12 +4424,33 @@ where
     R: Read,
     W: Write,
 {
+    write_cram_from_bam_reader_with_reference_repository_opts(
+        reader,
+        reference_sequence_repository,
+        writer,
+        CramWriteOptions::default(),
+    )
+}
+
+fn write_cram_from_bam_reader_with_reference_repository_opts<R, W>(
+    reader: R,
+    reference_sequence_repository: fasta::Repository,
+    writer: W,
+    options: CramWriteOptions,
+) -> io::Result<W>
+where
+    R: Read,
+    W: Write,
+{
     use sam::alignment::io::Write as _;
 
     let mut reader = bam::io::Reader::new(reader);
     let header = reader.read_header()?;
-    let mut writer = cram::io::writer::Builder::default()
-        .set_reference_sequence_repository(reference_sequence_repository)
+    let mut writer = options
+        .configure(
+            cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(reference_sequence_repository),
+        )
         .build_from_writer(writer);
 
     writer.write_header(&header)?;
@@ -5350,10 +5430,54 @@ where
     write_cram_from_reader_with_reference_repository(reader, reference_sequence_repository, writer)
 }
 
+/// As [`write_cram_from_path_with_reference`], with explicit CRAM
+/// encoder options (`seqs_per_slice` / `slices_per_slice` /
+/// `embed_ref`).
+pub fn write_cram_from_path_with_reference_and_options<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    options: CramWriteOptions,
+    writer: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+    let data_path = associated_data_path(src);
+    File::open(data_path).and_then(|reader| {
+        write_cram_from_reader_with_reference_repository_opts(
+            reader,
+            reference_sequence_repository,
+            writer,
+            options,
+        )
+    })
+}
+
 fn write_cram_from_reader_with_reference_repository<R, W>(
     reader: R,
     reference_sequence_repository: fasta::Repository,
     writer: W,
+) -> io::Result<W>
+where
+    R: Read,
+    W: Write,
+{
+    write_cram_from_reader_with_reference_repository_opts(
+        reader,
+        reference_sequence_repository,
+        writer,
+        CramWriteOptions::default(),
+    )
+}
+
+fn write_cram_from_reader_with_reference_repository_opts<R, W>(
+    reader: R,
+    reference_sequence_repository: fasta::Repository,
+    writer: W,
+    options: CramWriteOptions,
 ) -> io::Result<W>
 where
     R: Read,
@@ -5365,8 +5489,11 @@ where
         .set_reference_sequence_repository(reference_sequence_repository.clone())
         .build_from_reader(reader);
     let header = reader.read_header()?;
-    let mut writer = cram::io::writer::Builder::default()
-        .set_reference_sequence_repository(reference_sequence_repository)
+    let mut writer = options
+        .configure(
+            cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(reference_sequence_repository),
+        )
         .build_from_writer(writer);
 
     writer.write_header(&header)?;
@@ -5951,7 +6078,54 @@ where
         reader,
         reference_sequence_repository,
         writer,
-        true,
+        CramWriteOptions::embedded(),
+    )
+}
+
+/// As [`write_cram_from_sam_reader_with_reference`], with explicit
+/// CRAM encoder options (`seqs_per_slice` / `slices_per_slice` /
+/// `embed_ref`).
+pub fn write_cram_from_sam_reader_with_reference_and_options<R, Q, W>(
+    reader: &mut sam::io::Reader<R>,
+    reference_src: Q,
+    options: CramWriteOptions,
+    writer: W,
+) -> io::Result<W>
+where
+    R: BufRead,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let reference_sequence_repository = cram_reference_repository_from_fasta_path(reference_src)?;
+
+    write_cram_from_sam_reader_with_reference_repository_opts(
+        reader,
+        reference_sequence_repository,
+        writer,
+        options,
+    )
+}
+
+/// As [`write_cram_from_sam_path_with_reference`], with explicit CRAM
+/// encoder options.
+pub fn write_cram_from_sam_path_with_reference_and_options<P, Q, W>(
+    src: P,
+    reference_src: Q,
+    options: CramWriteOptions,
+    writer: W,
+) -> io::Result<W>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    W: Write,
+{
+    let file = File::open(src)?;
+    let mut reader = sam::io::Reader::new(io::BufReader::new(file));
+    write_cram_from_sam_reader_with_reference_and_options(
+        &mut reader,
+        reference_src,
+        options,
+        writer,
     )
 }
 
@@ -5985,7 +6159,7 @@ where
         reader,
         reference_sequence_repository,
         writer,
-        false,
+        CramWriteOptions::default(),
     )
 }
 
@@ -5993,7 +6167,7 @@ fn write_cram_from_sam_reader_with_reference_repository_opts<R, W>(
     reader: &mut sam::io::Reader<R>,
     reference_sequence_repository: fasta::Repository,
     writer: W,
-    embed_reference: bool,
+    options: CramWriteOptions,
 ) -> io::Result<W>
 where
     R: BufRead,
@@ -6002,9 +6176,11 @@ where
     use sam::alignment::io::Write as _;
 
     let header = reader.read_header()?;
-    let mut writer = cram::io::writer::Builder::default()
-        .set_reference_sequence_repository(reference_sequence_repository)
-        .set_embed_reference(embed_reference)
+    let mut writer = options
+        .configure(
+            cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(reference_sequence_repository),
+        )
         .build_from_writer(writer);
 
     writer.write_header(&header)?;
@@ -9170,5 +9346,52 @@ mod tests {
 
         // Empty read is handled.
         assert!(compute_local_nm(b"", &[], &[], None, 50, 60, false).is_empty());
+    }
+
+    #[test]
+    fn cram_write_options_records_per_slice_partitions_containers() {
+        use super::{
+            CramWriteOptions, write_cram_from_sam_path_with_reference,
+            write_cram_from_sam_path_with_reference_and_options,
+        };
+        use crate::cram;
+
+        fn count_containers(buf: &[u8]) -> usize {
+            let mut reader = cram::io::reader::Builder::default().build_from_reader(buf);
+            reader.read_header().unwrap();
+
+            let mut containers = 0;
+            let mut container = cram::io::reader::Container::default();
+            while reader.read_container(&mut container).unwrap() != 0 {
+                containers += 1;
+            }
+            containers
+        }
+
+        let sam = fixture("htslib/test/ce#1000.sam");
+        let reference = fixture("htslib/test/ce.fa");
+
+        // Default: all ~1000 records collapse into one container.
+        let default_buf =
+            write_cram_from_sam_path_with_reference(&sam, &reference, Vec::new()).unwrap();
+        assert_eq!(count_containers(&default_buf), 1);
+
+        // seqs_per_slice=100 must cut a new slice/container every 100
+        // records, so a 1000-record file yields multiple containers.
+        let options = CramWriteOptions {
+            records_per_slice: Some(100),
+            ..CramWriteOptions::default()
+        };
+        let chunked_buf = write_cram_from_sam_path_with_reference_and_options(
+            &sam,
+            &reference,
+            options,
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            count_containers(&chunked_buf) > 1,
+            "seqs_per_slice=100 should produce more than one container"
+        );
     }
 }
