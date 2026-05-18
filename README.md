@@ -1,5 +1,7 @@
 # htslib-rs
 
+[![CI](https://github.com/madhavajay/htslib-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/madhavajay/htslib-rs/actions/workflows/ci.yml?query=branch%3Amain)
+
 `htslib-rs` is a pure Rust HTSlib compatibility project. The current target is
 a Rust-only API with test parity against selected HTSlib library behavior. It is
 not currently a C ABI replacement and does not provide HTSlib command-line
