@@ -4470,6 +4470,7 @@ pub fn write_cram_matching_filter_from_bam_path_with_reference<P, Q, W>(
     src: P,
     reference_src: Q,
     filter: &str,
+    options: CramWriteOptions,
     writer: W,
 ) -> io::Result<W>
 where
@@ -4483,6 +4484,7 @@ where
             reader,
             reference_sequence_repository,
             filter,
+            options,
             writer,
         )
     })
@@ -4493,6 +4495,7 @@ pub fn write_cram_matching_filter_from_bam_reader_with_reference<R, Q, W>(
     reader: R,
     reference_src: Q,
     filter: &str,
+    options: CramWriteOptions,
     writer: W,
 ) -> io::Result<W>
 where
@@ -4506,6 +4509,7 @@ where
         reader,
         reference_sequence_repository,
         filter,
+        options,
         writer,
     )
 }
@@ -4514,6 +4518,7 @@ fn write_cram_matching_filter_from_bam_reader_with_reference_repository<R, W>(
     reader: R,
     reference_sequence_repository: fasta::Repository,
     filter: &str,
+    options: CramWriteOptions,
     writer: W,
 ) -> io::Result<W>
 where
@@ -4525,8 +4530,11 @@ where
     let mut reader = bam::io::Reader::new(reader);
     let header = reader.read_header()?;
     let filter = Filter::new(filter);
-    let mut writer = cram::io::writer::Builder::default()
-        .set_reference_sequence_repository(reference_sequence_repository)
+    let mut writer = options
+        .configure(
+            cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(reference_sequence_repository),
+        )
         .build_from_writer(writer);
 
     writer.write_header(&header)?;
@@ -5513,6 +5521,7 @@ pub fn write_cram_matching_filter_from_path_with_reference<P, Q, W>(
     src: P,
     reference_src: Q,
     filter: &str,
+    options: CramWriteOptions,
     writer: W,
 ) -> io::Result<W>
 where
@@ -5527,6 +5536,7 @@ where
             reader,
             reference_sequence_repository,
             filter,
+            options,
             writer,
         )
     })
@@ -5537,6 +5547,7 @@ pub fn write_cram_matching_filter_from_reader_with_reference<R, Q, W>(
     reader: R,
     reference_src: Q,
     filter: &str,
+    options: CramWriteOptions,
     writer: W,
 ) -> io::Result<W>
 where
@@ -5550,6 +5561,7 @@ where
         reader,
         reference_sequence_repository,
         filter,
+        options,
         writer,
     )
 }
@@ -5558,6 +5570,7 @@ fn write_cram_matching_filter_from_reader_with_reference_repository<R, W>(
     reader: R,
     reference_sequence_repository: fasta::Repository,
     filter: &str,
+    options: CramWriteOptions,
     writer: W,
 ) -> io::Result<W>
 where
@@ -5571,8 +5584,11 @@ where
         .build_from_reader(reader);
     let header = reader.read_header()?;
     let filter = Filter::new(filter);
-    let mut writer = cram::io::writer::Builder::default()
-        .set_reference_sequence_repository(reference_sequence_repository)
+    let mut writer = options
+        .configure(
+            cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(reference_sequence_repository),
+        )
         .build_from_writer(writer);
 
     writer.write_header(&header)?;
@@ -5720,6 +5736,7 @@ pub fn write_cram_regions_from_path_with_reference<P, Q, W>(
     src: P,
     reference_src: Q,
     regions: &[Region],
+    options: CramWriteOptions,
     dst: W,
 ) -> io::Result<W>
 where
@@ -5737,8 +5754,10 @@ where
         .set_index(index)
         .build_from_path(data_path)?;
     let header = reader.read_header()?;
-    let mut writer = cram::io::writer::Builder::default()
-        .set_reference_sequence_repository(repository)
+    let mut writer = options
+        .configure(
+            cram::io::writer::Builder::default().set_reference_sequence_repository(repository),
+        )
         .build_from_writer(dst);
 
     writer.write_header(&header)?;
@@ -5763,6 +5782,7 @@ pub fn write_cram_regions_matching_filter_from_path_with_reference<P, Q, W>(
     reference_src: Q,
     regions: &[Region],
     filter: &str,
+    options: CramWriteOptions,
     dst: W,
 ) -> io::Result<W>
 where
@@ -5781,8 +5801,10 @@ where
         .build_from_path(data_path)?;
     let header = reader.read_header()?;
     let filter = Filter::new(filter);
-    let mut writer = cram::io::writer::Builder::default()
-        .set_reference_sequence_repository(repository)
+    let mut writer = options
+        .configure(
+            cram::io::writer::Builder::default().set_reference_sequence_repository(repository),
+        )
         .build_from_writer(dst);
 
     writer.write_header(&header)?;
@@ -6200,6 +6222,7 @@ pub fn write_cram_matching_filter_from_sam_path_with_reference<P, Q, W>(
     src: P,
     reference_src: Q,
     filter: &str,
+    options: CramWriteOptions,
     writer: W,
 ) -> io::Result<W>
 where
@@ -6215,6 +6238,7 @@ where
         &mut reader,
         reference_sequence_repository,
         filter,
+        options,
         writer,
     )
 }
@@ -6224,6 +6248,7 @@ pub fn write_cram_matching_filter_from_sam_reader_with_reference<R, Q, W>(
     reader: &mut sam::io::Reader<R>,
     reference_src: Q,
     filter: &str,
+    options: CramWriteOptions,
     writer: W,
 ) -> io::Result<W>
 where
@@ -6237,6 +6262,7 @@ where
         reader,
         reference_sequence_repository,
         filter,
+        options,
         writer,
     )
 }
@@ -6245,6 +6271,7 @@ fn write_cram_matching_filter_from_sam_reader_with_reference_repository<R, W>(
     reader: &mut sam::io::Reader<R>,
     reference_sequence_repository: fasta::Repository,
     filter: &str,
+    options: CramWriteOptions,
     writer: W,
 ) -> io::Result<W>
 where
@@ -6255,8 +6282,11 @@ where
 
     let header = reader.read_header()?;
     let filter = Filter::new(filter);
-    let mut writer = cram::io::writer::Builder::default()
-        .set_reference_sequence_repository(reference_sequence_repository)
+    let mut writer = options
+        .configure(
+            cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(reference_sequence_repository),
+        )
         .build_from_writer(writer);
 
     writer.write_header(&header)?;
