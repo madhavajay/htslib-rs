@@ -418,6 +418,29 @@ impl AlignmentRecordSummary {
         &self.sequence
     }
 
+    /// Query length derived from the CIGAR: the sum of query-consuming
+    /// operations (`M`/`I`/`S`/`=`/`X`), matching `samtools view -m` and the
+    /// upstream test harness's `querylen`. An empty CIGAR (e.g. an unmapped
+    /// record with `*`) yields 0, so such records are excluded by `-m INT`.
+    pub fn cigar_query_len(&self) -> usize {
+        use sam::alignment::record::cigar::op::Kind;
+
+        self.cigar
+            .iter()
+            .filter(|op| {
+                matches!(
+                    op.kind(),
+                    Kind::Match
+                        | Kind::Insertion
+                        | Kind::SoftClip
+                        | Kind::SequenceMatch
+                        | Kind::SequenceMismatch
+                )
+            })
+            .map(|op| op.len())
+            .sum()
+    }
+
     /// Returns the raw phred quality-score bytes.
     pub fn quality_score_bytes(&self) -> &[u8] {
         &self.quality_scores
@@ -6523,9 +6546,32 @@ where
         .set_index(index)
         .build_from_path(data_path)?;
     let header = reader.read_header()?;
+    let reference_sequence_id = header
+        .reference_sequences()
+        .get_index_of(region.name())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "invalid reference sequence name: {}",
+                    String::from_utf8_lossy(region.name())
+                ),
+            )
+        })?;
     let query = reader.query(&header, region)?;
 
-    query.collect()
+    // noodles' CRAM `query` yields every record in the slices that overlap the
+    // region (slice-granular), so callers must still filter each record to the
+    // requested interval — mirroring the SAM-output path. Without this the
+    // count/metric callers over-count records near slice boundaries.
+    let mut records = Vec::new();
+    for result in query {
+        let record = result?;
+        if record_intersects_region(&record, reference_sequence_id, region) {
+            records.push(record);
+        }
+    }
+    Ok(records)
 }
 
 fn view_cram_regions_as_sam_text_from_path_with_reference_repository<P>(
