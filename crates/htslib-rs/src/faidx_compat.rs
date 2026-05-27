@@ -660,7 +660,8 @@ mod tests {
     const FASTA: &[u8] = include_bytes!("../../../repos/htslib/test/xx.fa");
     const FAI: &[u8] = include_bytes!("../../../repos/htslib/test/xx.fa.fai");
     const FASTQ: &[u8] = include_bytes!("../../../repos/htslib/test/faidx/fastqs.fq");
-    const FASTQ_FAI: &[u8] = include_bytes!("../../../repos/htslib/test/faidx/fastqs.fq.expected.fai");
+    const FASTQ_FAI: &[u8] =
+        include_bytes!("../../../repos/htslib/test/faidx/fastqs.fq.expected.fai");
 
     #[test]
     fn test_read_and_build_index() {

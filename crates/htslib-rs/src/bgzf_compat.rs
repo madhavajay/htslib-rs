@@ -554,7 +554,8 @@ mod tests {
 
         use super::{BamFrameCopy, append_bam_alignment_frames};
 
-        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../repos/htslib/test/range.bam");
+        let src =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../repos/htslib/test/range.bam");
 
         // Reference: header + all records decoded normally.
         fn names<R: std::io::Read>(

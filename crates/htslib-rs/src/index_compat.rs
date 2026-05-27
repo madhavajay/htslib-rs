@@ -871,12 +871,13 @@ mod tests {
     fn test_build_bam_indexes_with_worker_count() {
         let worker_count = NonZero::new(2).unwrap();
 
-        let bai =
-            build_bai_with_worker_count(fixture("repos/htslib/test/range.bam"), worker_count).unwrap();
+        let bai = build_bai_with_worker_count(fixture("repos/htslib/test/range.bam"), worker_count)
+            .unwrap();
         assert!(bai_reference_sequence_count(&bai) > 0);
 
-        let csi = build_bam_csi_with_worker_count(fixture("repos/htslib/test/range.bam"), worker_count)
-            .unwrap();
+        let csi =
+            build_bam_csi_with_worker_count(fixture("repos/htslib/test/range.bam"), worker_count)
+                .unwrap();
         assert!(csi_reference_sequence_count(&csi) > 0);
     }
 
