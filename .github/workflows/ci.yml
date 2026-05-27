@@ -59,15 +59,15 @@ jobs:
             zlib1g-dev
 
       - name: Configure HTSlib
-        working-directory: htslib
+        working-directory: repos/htslib
         run: |
           autoreconf -i
           ./configure --enable-plugins --with-libdeflate
 
       - name: Build HTSlib
-        working-directory: htslib
+        working-directory: repos/htslib
         run: make -j"$(nproc)"
 
       - name: HTSlib C tests
-        working-directory: htslib
+        working-directory: repos/htslib
         run: make check

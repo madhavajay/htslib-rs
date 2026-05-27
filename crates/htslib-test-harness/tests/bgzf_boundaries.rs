@@ -5,7 +5,7 @@ use htslib_rs::alignment_compat::count_bam_records_from_path;
 fn fixture(path: impl AsRef<Path>) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("htslib/test")
+        .join("repos/htslib/test")
         .join(path)
 }
 

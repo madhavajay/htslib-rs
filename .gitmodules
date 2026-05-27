@@ -1,8 +1,8 @@
-[submodule "noodles"]
-	path = noodles
+[submodule "repos/noodles"]
+	path = repos/noodles
 	url = git@github.com:madhavajay/noodles.git
 	branch = madhava/bioscript
-[submodule "htslib"]
-	path = htslib
+[submodule "repos/htslib"]
+	path = repos/htslib
 	url = https://github.com/madhavajay/htslib.git
 	branch = htslib-rs-compat

@@ -8,7 +8,7 @@ use htslib_rs::log_compat::{
 fn htslib_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("htslib")
+        .join("repos/htslib")
 }
 
 #[test]

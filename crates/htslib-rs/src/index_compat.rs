@@ -834,35 +834,35 @@ mod tests {
 
     #[test]
     fn test_read_bai() {
-        let index = read_bai(fixture("htslib/test/index.bam.bai")).unwrap();
+        let index = read_bai(fixture("repos/htslib/test/index.bam.bai")).unwrap();
 
         assert!(bai_reference_sequence_count(&index) > 0);
     }
 
     #[test]
     fn test_read_bam_csi() {
-        let index = read_csi(fixture("htslib/test/index.bam.csi")).unwrap();
+        let index = read_csi(fixture("repos/htslib/test/index.bam.csi")).unwrap();
 
         assert!(csi_reference_sequence_count(&index) > 0);
     }
 
     #[test]
     fn test_read_vcf_csi() {
-        let index = read_csi(fixture("htslib/test/index.vcf.gz.csi")).unwrap();
+        let index = read_csi(fixture("repos/htslib/test/index.vcf.gz.csi")).unwrap();
 
         assert!(csi_reference_sequence_count(&index) > 0);
     }
 
     #[test]
     fn test_read_tbi() {
-        let index = read_tbi(fixture("htslib/test/index.vcf.gz.tbi")).unwrap();
+        let index = read_tbi(fixture("repos/htslib/test/index.vcf.gz.tbi")).unwrap();
 
         assert!(tbi_reference_sequence_count(&index) > 0);
     }
 
     #[test]
     fn test_build_bai() {
-        let index = build_bai(fixture("htslib/test/range.bam")).unwrap();
+        let index = build_bai(fixture("repos/htslib/test/range.bam")).unwrap();
 
         assert!(bai_reference_sequence_count(&index) > 0);
     }
@@ -871,26 +871,27 @@ mod tests {
     fn test_build_bam_indexes_with_worker_count() {
         let worker_count = NonZero::new(2).unwrap();
 
-        let bai =
-            build_bai_with_worker_count(fixture("htslib/test/range.bam"), worker_count).unwrap();
+        let bai = build_bai_with_worker_count(fixture("repos/htslib/test/range.bam"), worker_count)
+            .unwrap();
         assert!(bai_reference_sequence_count(&bai) > 0);
 
-        let csi = build_bam_csi_with_worker_count(fixture("htslib/test/range.bam"), worker_count)
-            .unwrap();
+        let csi =
+            build_bam_csi_with_worker_count(fixture("repos/htslib/test/range.bam"), worker_count)
+                .unwrap();
         assert!(csi_reference_sequence_count(&csi) > 0);
     }
 
     #[test]
     fn test_build_vcf_tbi_and_csi() {
-        let vcf = std::fs::File::open(fixture("htslib/test/index.vcf")).unwrap();
+        let vcf = std::fs::File::open(fixture("repos/htslib/test/index.vcf")).unwrap();
         let (_, tbi) = build_vcf_tbi(std::io::BufReader::new(vcf), Vec::new()).unwrap();
         assert!(tbi_reference_sequence_count(&tbi) > 0);
 
-        let vcf = std::fs::File::open(fixture("htslib/test/index.vcf")).unwrap();
+        let vcf = std::fs::File::open(fixture("repos/htslib/test/index.vcf")).unwrap();
         let (_, csi) = build_vcf_csi(std::io::BufReader::new(vcf), Vec::new()).unwrap();
         assert!(csi_reference_sequence_count(&csi) > 0);
 
-        let vcf = std::fs::File::open(fixture("htslib/test/index.vcf")).unwrap();
+        let vcf = std::fs::File::open(fixture("repos/htslib/test/index.vcf")).unwrap();
         let (_, csi) =
             build_vcf_csi_with_min_shift(std::io::BufReader::new(vcf), Vec::new(), 10).unwrap();
         assert_eq!(csi.min_shift(), 10);
@@ -898,7 +899,7 @@ mod tests {
 
     #[test]
     fn test_build_bcf_csi() {
-        let index = build_bcf_csi(fixture("htslib/test/tabix/vcf_file.bcf")).unwrap();
+        let index = build_bcf_csi(fixture("repos/htslib/test/tabix/vcf_file.bcf")).unwrap();
 
         assert!(csi_reference_sequence_count(&index) > 0);
     }

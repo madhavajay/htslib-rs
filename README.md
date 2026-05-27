@@ -9,7 +9,7 @@ tools.
 
 The project vendors two upstream codebases as submodules:
 
-- `htslib/`: upstream HTSlib C source and test fixtures.
+- `repos/htslib/`: upstream HTSlib C source and test fixtures.
 - `noodles/`: the Rust bioinformatics format implementation this project
   builds on.
 
@@ -79,7 +79,7 @@ That fork carries small compatibility fixes needed by HTSlib fixtures.
 ### BCF GT Integer Width
 
 The upstream HTSlib fixture
-`htslib/test/tabix/vcf_file.vcf` includes a large multiallelic record with
+`repos/htslib/test/tabix/vcf_file.vcf` includes a large multiallelic record with
 genotypes:
 
 ```text
@@ -113,7 +113,7 @@ SAM writing so:
   `2^31 - 1` limit.
 
 This supports HTSlib large-coordinate fixtures such as
-`htslib/test/longrefs/longref.sam`.
+`repos/htslib/test/longrefs/longref.sam`.
 
 ## Test Coverage
 

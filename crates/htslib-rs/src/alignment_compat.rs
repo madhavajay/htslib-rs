@@ -8569,7 +8569,7 @@ mod tests {
 
     #[test]
     fn test_read_sam_header_and_records() {
-        let path = fixture("htslib/test/xx#minimal.sam");
+        let path = fixture("repos/htslib/test/xx#minimal.sam");
         let header = read_sam_header_from_path(&path).unwrap();
 
         assert_eq!(reference_sequence_count(&header), 2);
@@ -8726,7 +8726,7 @@ mod tests {
 
     #[test]
     fn test_read_bam_header_and_records() {
-        let path = fixture("htslib/test/range.bam");
+        let path = fixture("repos/htslib/test/range.bam");
         let header = read_bam_header_from_path(&path).unwrap();
 
         assert!(reference_sequence_count(&header) > 0);
@@ -8735,7 +8735,7 @@ mod tests {
 
     #[test]
     fn test_query_bam_records() {
-        let path = fixture("htslib/test/range.bam");
+        let path = fixture("repos/htslib/test/range.bam");
         let region = "CHROMOSOME_II:2980-2980".parse().unwrap();
 
         assert_eq!(
@@ -8758,7 +8758,7 @@ mod tests {
 
     #[test]
     fn test_write_bam_regions_from_path() {
-        let path = fixture("htslib/test/range.bam");
+        let path = fixture("repos/htslib/test/range.bam");
         let regions = [
             "CHROMOSOME_II:2980-2980".parse().unwrap(),
             "CHROMOSOME_IV:1500-1500".parse().unwrap(),
@@ -8781,7 +8781,7 @@ mod tests {
 
     #[test]
     fn test_write_bam_regions_from_path_with_worker_count() {
-        let path = fixture("htslib/test/range.bam");
+        let path = fixture("repos/htslib/test/range.bam");
         let regions = ["CHROMOSOME_II:2980-2980".parse().unwrap()];
 
         let bam_data = write_bam_regions_from_path_with_worker_count(
@@ -8805,7 +8805,7 @@ mod tests {
 
     #[test]
     fn test_write_bam_records_with_required_flags_with_worker_count() {
-        let path = fixture("htslib/test/range.bam");
+        let path = fixture("repos/htslib/test/range.bam");
 
         let bam_data = write_bam_records_with_required_flags_from_path_with_worker_count(
             &path,
@@ -8819,7 +8819,7 @@ mod tests {
 
     #[test]
     fn test_read_cram_header_and_records() {
-        let path = fixture("htslib/test/range.cram");
+        let path = fixture("repos/htslib/test/range.cram");
         let header = read_cram_header_from_path(&path).unwrap();
 
         assert!(reference_sequence_count(&header) > 0);
@@ -9146,9 +9146,9 @@ mod tests {
         use super::query_cram_records_all_from_path_with_reference;
         use crate::sam::alignment::RecordBuf;
 
-        let cram = fixture("htslib/test/range.cram");
-        let reference = fixture("htslib/test/ce.fa");
-        let bam = fixture("htslib/test/range.bam");
+        let cram = fixture("repos/htslib/test/range.cram");
+        let reference = fixture("repos/htslib/test/ce.fa");
+        let bam = fixture("repos/htslib/test/range.bam");
 
         let cram_records =
             query_cram_records_all_from_path_with_reference(&cram, &reference).unwrap();
@@ -9178,7 +9178,7 @@ mod tests {
     #[test]
     fn write_bam_from_path_transforming_header_rewrites_header_keeps_records() {
         use super::{summarize_bam_records_from_path, write_bam_from_path_transforming_header};
-        let bam = fixture("htslib/test/range.bam");
+        let bam = fixture("repos/htslib/test/range.bam");
         let dir = std::env::temp_dir().join(format!("htslib-rs-bamhdr-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let out = dir.join("out.bam");
@@ -9217,8 +9217,8 @@ mod tests {
         use super::summarize_cram_records_from_path_synthesizing_reference;
         use super::{summarize_bam_records_from_path, summarize_cram_records_from_path};
 
-        let cram = fixture("htslib/test/range.cram");
-        let bam = fixture("htslib/test/range.bam");
+        let cram = fixture("repos/htslib/test/range.cram");
+        let bam = fixture("repos/htslib/test/range.bam");
 
         // The plain no-reference path errors on reference-compressed
         // CRAM (noodles eagerly resolves), which is exactly why the
@@ -9246,8 +9246,8 @@ mod tests {
         use crate::core::Region;
         use crate::sam::alignment::record::Cigar as _;
 
-        let cram = fixture("htslib/test/range.cram");
-        let reference = fixture("htslib/test/ce.fa");
+        let cram = fixture("repos/htslib/test/range.cram");
+        let reference = fixture("repos/htslib/test/ce.fa");
         let region: Region = "CHROMOSOME_II:2980-2980".parse().unwrap();
 
         let synthetic =
@@ -9303,17 +9303,17 @@ mod tests {
         // must error cleanly rather than silently mis-decoding.
         // (The positive embed_ref path is proven by the samtools-rs
         // `reference` CRAM integration test, whose fixture is an
-        // embed_ref CRAM not shipped in htslib-rs/htslib/test.)
+        // embed_ref CRAM not shipped in htslib-rs/repos/htslib/test.)
         use super::query_cram_records_all_from_path;
-        let cram = fixture("htslib/test/range.cram");
+        let cram = fixture("repos/htslib/test/range.cram");
         assert!(query_cram_records_all_from_path(&cram).is_err());
     }
 
     #[test]
     fn test_pileup_iterator_cram_matches_bam() {
-        let bam = fixture("htslib/test/range.bam");
-        let cram = fixture("htslib/test/range.cram");
-        let reference = fixture("htslib/test/ce.fa");
+        let bam = fixture("repos/htslib/test/range.bam");
+        let cram = fixture("repos/htslib/test/range.cram");
+        let reference = fixture("repos/htslib/test/ce.fa");
 
         let mut from_bam = pileup_from_alignment_paths(std::slice::from_ref(&bam)).unwrap();
         let mut from_cram =
@@ -9398,8 +9398,8 @@ mod tests {
             containers
         }
 
-        let sam = fixture("htslib/test/ce#1000.sam");
-        let reference = fixture("htslib/test/ce.fa");
+        let sam = fixture("repos/htslib/test/ce#1000.sam");
+        let reference = fixture("repos/htslib/test/ce.fa");
 
         // Default: all ~1000 records collapse into one container.
         let default_buf =

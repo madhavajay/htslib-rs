@@ -16,7 +16,7 @@ type, constant, and macro decisions are tracked in the item-level section below.
 
 The extraction aid for that follow-up work is
 [`public-api-inventory.md`](public-api-inventory.md), generated from the public
-headers under `htslib/htslib`.
+headers under `repos/htslib/htslib`.
 
 | Classification | Public API Areas |
 | --- | --- |

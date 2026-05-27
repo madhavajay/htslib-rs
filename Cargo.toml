@@ -21,7 +21,7 @@ indexmap = "2.0.0"
 lexical-core = "1.0.0"
 libdeflater = "1.19.0"
 memchr = "2.3.3"
-noodles = { path = "noodles/noodles", features = [
+noodles = { path = "repos/noodles/noodles", features = [
     "bam",
     "bcf",
     "bgzf",

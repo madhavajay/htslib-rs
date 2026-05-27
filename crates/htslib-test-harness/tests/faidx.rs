@@ -11,17 +11,20 @@ use htslib_rs::{
     },
 };
 
-const FASTA: &[u8] = include_bytes!("../../../htslib/test/faidx/faidx.fa");
-const FASTA_FAI: &[u8] = include_bytes!("../../../htslib/test/faidx/faidx.fa.expected.fai");
-const FASTA_EXPECTED: &[u8] = include_bytes!("../../../htslib/test/faidx/faidx.1.expected.fa");
-const CE_FASTA: &[u8] = include_bytes!("../../../htslib/test/ce.fa");
-const CE_FASTA_FAI: &[u8] = include_bytes!("../../../htslib/test/ce.fa.fai");
-const CE_FASTA_EXPECTED: &[u8] = include_bytes!("../../../htslib/test/faidx/ce.1.expected.fa");
-const FASTQ: &[u8] = include_bytes!("../../../htslib/test/faidx/fastqs.fq");
-const FASTQ_FAI: &[u8] = include_bytes!("../../../htslib/test/faidx/fastqs.fq.expected.fai");
-const FASTQ_EXPECTED: &[u8] = include_bytes!("../../../htslib/test/faidx/fastqs.1.expected.fq");
+const FASTA: &[u8] = include_bytes!("../../../repos/htslib/test/faidx/faidx.fa");
+const FASTA_FAI: &[u8] = include_bytes!("../../../repos/htslib/test/faidx/faidx.fa.expected.fai");
+const FASTA_EXPECTED: &[u8] =
+    include_bytes!("../../../repos/htslib/test/faidx/faidx.1.expected.fa");
+const CE_FASTA: &[u8] = include_bytes!("../../../repos/htslib/test/ce.fa");
+const CE_FASTA_FAI: &[u8] = include_bytes!("../../../repos/htslib/test/ce.fa.fai");
+const CE_FASTA_EXPECTED: &[u8] =
+    include_bytes!("../../../repos/htslib/test/faidx/ce.1.expected.fa");
+const FASTQ: &[u8] = include_bytes!("../../../repos/htslib/test/faidx/fastqs.fq");
+const FASTQ_FAI: &[u8] = include_bytes!("../../../repos/htslib/test/faidx/fastqs.fq.expected.fai");
+const FASTQ_EXPECTED: &[u8] =
+    include_bytes!("../../../repos/htslib/test/faidx/fastqs.1.expected.fq");
 const FASTQ_AS_FASTA_EXPECTED: &[u8] =
-    include_bytes!("../../../htslib/test/faidx/fastqs.2.expected.fa");
+    include_bytes!("../../../repos/htslib/test/faidx/fastqs.2.expected.fa");
 
 #[test]
 fn builds_fasta_fai_matching_htslib_golden() -> Result<(), Box<dyn std::error::Error>> {

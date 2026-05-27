@@ -4225,7 +4225,7 @@ mod tests {
 
     #[test]
     fn test_read_vcf_header_and_records() {
-        let path = fixture("htslib/test/index.vcf");
+        let path = fixture("repos/htslib/test/index.vcf");
         let header = read_vcf_header_from_path(&path).unwrap();
 
         assert!(contig_count(&header) > 0);
@@ -4234,7 +4234,7 @@ mod tests {
 
     #[test]
     fn test_query_vcf_records() {
-        let src = fixture("htslib/test/tabix/vcf_file.vcf");
+        let src = fixture("repos/htslib/test/tabix/vcf_file.vcf");
         let bgzf_path = std::env::temp_dir().join(format!(
             "htslib-rs-variant-query-{}.vcf.gz",
             std::process::id()
@@ -4258,7 +4258,7 @@ mod tests {
 
     #[test]
     fn test_read_bcf_header_and_records() {
-        let path = fixture("htslib/test/tabix/vcf_file.bcf");
+        let path = fixture("repos/htslib/test/tabix/vcf_file.bcf");
         let header = read_bcf_header_from_path(&path).unwrap();
 
         assert!(sample_count(&header) > 0);
@@ -4267,7 +4267,7 @@ mod tests {
 
     #[test]
     fn test_query_bcf_records() {
-        let src = fixture("htslib/test/tabix/vcf_file.bcf");
+        let src = fixture("repos/htslib/test/tabix/vcf_file.bcf");
         let bcf_path = std::env::temp_dir().join(format!(
             "htslib-rs-variant-query-{}.bcf",
             std::process::id()

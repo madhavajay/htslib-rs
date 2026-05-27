@@ -4,12 +4,12 @@ Goal: build a pure Rust replacement for HTSlib's C implementation, port HTSlib's
 
 ## Current Inputs
 
-- `htslib/`: upstream C HTSlib source and test suite.
+- `repos/htslib/`: upstream C HTSlib source and test suite.
 - `noodles/`: upstream Rust bioinformatics format crates.
 - HTSlib source areas reviewed:
-  - public headers in `htslib/htslib/*.h`
-  - core library objects listed in `htslib/Makefile`
-  - test programs and scripted suites under `htslib/test`
+  - public headers in `repos/htslib/htslib/*.h`
+  - core library objects listed in `repos/htslib/Makefile`
+  - test programs and scripted suites under `repos/htslib/test`
 - Noodles crates reviewed:
   - `noodles-bam`, `noodles-bcf`, `noodles-bgzf`, `noodles-cram`, `noodles-csi`
   - `noodles-fasta`, `noodles-fastq`, `noodles-sam`, `noodles-tabix`, `noodles-vcf`
@@ -50,7 +50,7 @@ Goal: build a pure Rust replacement for HTSlib's C implementation, port HTSlib's
 
 ## Phase 1: API Inventory and Coverage Map
 
-- [x] Inventory every public HTSlib header in `htslib/htslib`.
+- [x] Inventory every public HTSlib header in `repos/htslib/htslib`.
 - [x] Classify each public API item as:
   - [x] covered directly by noodles
   - [x] covered by a small adapter over noodles
@@ -104,7 +104,7 @@ Goal: build a pure Rust replacement for HTSlib's C implementation, port HTSlib's
 
 ## Phase 2: Test Harness
 
-- [x] Preserve HTSlib test data under `htslib/test` as fixtures.
+- [x] Preserve HTSlib test data under `repos/htslib/test` as fixtures.
 - [x] Port C unit tests to Rust integration tests.
   - [x] `test_bgzf.c`
     - [x] Port BGZF read/write round-trip and EOF marker checks.
