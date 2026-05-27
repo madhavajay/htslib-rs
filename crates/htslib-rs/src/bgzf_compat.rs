@@ -479,8 +479,8 @@ mod tests {
 
     #[test]
     fn test_read_and_write_all() {
-        const PLAIN: &[u8] = include_bytes!("../../../htslib/test/bgziptest.txt");
-        const BGZF: &[u8] = include_bytes!("../../../htslib/test/bgziptest.txt.gz");
+        const PLAIN: &[u8] = include_bytes!("../../../repos/htslib/test/bgziptest.txt");
+        const BGZF: &[u8] = include_bytes!("../../../repos/htslib/test/bgziptest.txt.gz");
 
         assert_eq!(read_all(Cursor::new(BGZF)).unwrap(), PLAIN);
 
@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn test_htslib_compression_modes() {
-        const PLAIN: &[u8] = include_bytes!("../../../htslib/test/bgziptest.txt");
+        const PLAIN: &[u8] = include_bytes!("../../../repos/htslib/test/bgziptest.txt");
 
         for kind in [
             CompressionKind::Uncompressed,
@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_htslib_bgzf_worker_count_paths() {
-        const PLAIN: &[u8] = include_bytes!("../../../htslib/test/bgziptest.txt");
+        const PLAIN: &[u8] = include_bytes!("../../../repos/htslib/test/bgziptest.txt");
         let worker_count = NonZero::new(2).unwrap();
 
         let encoded =
@@ -522,7 +522,7 @@ mod tests {
 
     #[test]
     fn test_read_write_and_query_gzi() {
-        const GZI: &[u8] = include_bytes!("../../../htslib/test/bgziptest.txt.gz.gzi");
+        const GZI: &[u8] = include_bytes!("../../../repos/htslib/test/bgziptest.txt.gz.gzi");
 
         let index = read_gzi(Cursor::new(GZI)).unwrap();
         assert_eq!(index.as_ref().len(), 5);
@@ -554,7 +554,7 @@ mod tests {
 
         use super::{BamFrameCopy, append_bam_alignment_frames};
 
-        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../htslib/test/range.bam");
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../repos/htslib/test/range.bam");
 
         // Reference: header + all records decoded normally.
         fn names<R: std::io::Read>(

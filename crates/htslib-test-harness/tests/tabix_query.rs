@@ -14,14 +14,14 @@ use htslib_rs::tabix_compat::{
 fn fixture(path: impl AsRef<Path>) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("htslib/test/tabix")
+        .join("repos/htslib/test/tabix")
         .join(path)
 }
 
 fn htslib_fixture(path: impl AsRef<Path>) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("htslib/test")
+        .join("repos/htslib/test")
         .join(path)
 }
 

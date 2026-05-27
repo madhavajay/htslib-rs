@@ -918,8 +918,8 @@ mod tests {
         write_sam_from_paired_fastq_with_indexes,
     };
 
-    const MINIMAL_FASTQ: &[u8] = include_bytes!("../../../htslib/test/fastq/minimal.fq");
-    const SINGLE_FASTQ: &[u8] = include_bytes!("../../../htslib/test/fastq/single.fq");
+    const MINIMAL_FASTQ: &[u8] = include_bytes!("../../../repos/htslib/test/fastq/minimal.fq");
+    const SINGLE_FASTQ: &[u8] = include_bytes!("../../../repos/htslib/test/fastq/single.fq");
 
     #[test]
     fn test_build_and_read_index() {

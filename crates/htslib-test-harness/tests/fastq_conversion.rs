@@ -10,7 +10,7 @@ use htslib_rs::fastq_compat::{
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../htslib/test/fastq")
+        .join("../../repos/htslib/test/fastq")
         .join(name);
 
     std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))

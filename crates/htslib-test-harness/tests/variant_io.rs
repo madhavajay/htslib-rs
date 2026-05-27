@@ -37,7 +37,7 @@ use htslib_rs::{index_compat::write_csi, tabix_compat::write_bgzf_and_csi};
 fn fixture(path: impl AsRef<Path>) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("htslib/test")
+        .join("repos/htslib/test")
         .join(path)
 }
 

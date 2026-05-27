@@ -657,10 +657,10 @@ mod tests {
         write_fastq_as_fasta_retrieval, write_fastq_index, write_fastq_retrieval, write_index,
     };
 
-    const FASTA: &[u8] = include_bytes!("../../../htslib/test/xx.fa");
-    const FAI: &[u8] = include_bytes!("../../../htslib/test/xx.fa.fai");
-    const FASTQ: &[u8] = include_bytes!("../../../htslib/test/faidx/fastqs.fq");
-    const FASTQ_FAI: &[u8] = include_bytes!("../../../htslib/test/faidx/fastqs.fq.expected.fai");
+    const FASTA: &[u8] = include_bytes!("../../../repos/htslib/test/xx.fa");
+    const FAI: &[u8] = include_bytes!("../../../repos/htslib/test/xx.fa.fai");
+    const FASTQ: &[u8] = include_bytes!("../../../repos/htslib/test/faidx/fastqs.fq");
+    const FASTQ_FAI: &[u8] = include_bytes!("../../../repos/htslib/test/faidx/fastqs.fq.expected.fai");
 
     #[test]
     fn test_read_and_build_index() {

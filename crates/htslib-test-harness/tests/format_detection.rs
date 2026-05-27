@@ -9,7 +9,7 @@ use htslib_rs::format::{Category, Compression, Exact, Format};
 fn fixture(path: impl AsRef<Path>) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("htslib/test")
+        .join("repos/htslib/test")
         .join(path)
 }
 

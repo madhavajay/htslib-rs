@@ -36,7 +36,7 @@ use htslib_rs::index_compat::{build_bai, build_sam_bai, build_sam_csi, write_bai
 fn fixture(path: impl AsRef<Path>) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("htslib/test")
+        .join("repos/htslib/test")
         .join(path)
 }
 

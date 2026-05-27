@@ -12,9 +12,9 @@ use htslib_rs::{
     },
 };
 
-const PLAIN: &[u8] = include_bytes!("../../../htslib/test/bgziptest.txt");
-const BGZF: &[u8] = include_bytes!("../../../htslib/test/bgziptest.txt.gz");
-const GZI: &[u8] = include_bytes!("../../../htslib/test/bgziptest.txt.gz.gzi");
+const PLAIN: &[u8] = include_bytes!("../../../repos/htslib/test/bgziptest.txt");
+const BGZF: &[u8] = include_bytes!("../../../repos/htslib/test/bgziptest.txt.gz");
+const GZI: &[u8] = include_bytes!("../../../repos/htslib/test/bgziptest.txt.gz.gzi");
 
 fn generated_text() -> Vec<u8> {
     let mut text = Vec::new();

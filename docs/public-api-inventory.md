@@ -1,6 +1,6 @@
 # Public API Inventory
 
-Generated from `htslib/htslib/*.h` as an extraction aid for item-level classification. This inventory lists candidate public declarations and macros by header; it should be refined as each item is mapped to a Rust API, noodles API, compatibility adapter, deprecated item, or out-of-scope decision.
+Generated from `repos/htslib/htslib/*.h` as an extraction aid for item-level classification. This inventory lists candidate public declarations and macros by header; it should be refined as each item is mapped to a Rust API, noodles API, compatibility adapter, deprecated item, or out-of-scope decision.
 
 ## `bgzf.h`
 
