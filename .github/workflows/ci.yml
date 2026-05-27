@@ -23,6 +23,14 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Use local noodles submodule for cargo
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [patch."https://github.com/madhavajay/noodles.git"]
+          noodles = { path = "repos/noodles/noodles" }
+          EOF
+
       - name: Format
         run: cargo fmt --all --check
 
