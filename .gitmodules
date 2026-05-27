@@ -1,6 +1,6 @@
 [submodule "repos/noodles"]
 	path = repos/noodles
-	url = git@github.com:madhavajay/noodles.git
+	url = https://github.com/madhavajay/noodles.git
 	branch = madhava/bioscript
 [submodule "repos/htslib"]
 	path = repos/htslib
